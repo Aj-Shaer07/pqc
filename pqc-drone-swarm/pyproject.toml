@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pqc-drone-swarm"
+version = "0.2.0"
+description = "Post-Quantum Decentralized Drone Swarm Coordination Framework"
+authors = [{ name = "Ajay Umashankar" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=41.0.0",
+    "pycryptodome>=3.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+networking = [
+    "paho-mqtt>=2.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,12 @@
+{
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/falcon_py",
+        "${workspaceFolder}/pqc-drone-swarm/src"
+    ],
+    "python.autoComplete.extraPaths": [
+        "${workspaceFolder}/falcon_py",
+        "${workspaceFolder}/pqc-drone-swarm/src"
+    ],
+    "python.defaultInterpreterPath": "${workspaceFolder}/venv/bin/python",
+    "python.envFile": "${workspaceFolder}/.env"
+}

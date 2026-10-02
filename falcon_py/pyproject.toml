@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falcon-py"
+version = "0.1.0"
+description = "Python implementation of Falcon signature scheme (tprest/falcon.py)"
+authors = [{ name = "Thomas Prest" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pycryptodome>=3.18.0",
+    "numpy>=1.20.0",
+]
+
+[tool.setuptools]
+py-modules = [
+    "falcon",
+    "common",
+    "encoding",
+    "ffsampling",
+    "fft",
+    "fft_constants",
+    "ntrugen",
+    "ntt",
+    "ntt_constants",
+    "rng",
+    "samplerz"
+]

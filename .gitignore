@@ -1,0 +1,19 @@
+# Ignore local environment files
+.env
+.env.local
+.env.*
+
+# Python bytecode and caches
+**/__pycache__/
+*.py[cod]
+*$py.class
+src/**/__pycache__/
+pqc-drone-swarm/src/**/__pycache__/
+falcon_py/__pycache__/
+
+# Virtual environments
+venv/
+.venv/
+
+# macOS metadata
+.DS_Store
