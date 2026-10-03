@@ -87,7 +87,7 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 - [ ] **Post-Quantum Cryptographic & Hardness Analysis**:
   - [ ] Quantum bit-security quantification for Falcon-512 (Core-SVP hardness via BKZ-2.0 lattice reduction simulation).
   - [ ] Classical vs Post-Quantum comparison (Falcon-512 vs ECDSA/RSA-2048 key size, signature size, and verification overhead).
-- [ ] **Empirical Red-Team Adversarial Test Battery (`tests/test_adversarial.py`)**:
+- [ ] **Empirical Red-Team Adversarial Test Battery**:
   - [ ] **Sybil Attack**: Injected rogue/ghost nodes attempting unauthorized approval broadcasts.
   - [ ] **Man-in-the-Middle (MitM) Tampering**: Ciphertext/AAD payload bit-flipping detection.
   - [ ] **Replay & Delay Attack**: Delayed injection of expired valid packets.
