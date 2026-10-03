@@ -1,6 +1,6 @@
 # Multi-stage lightweight Dockerfile for PQC Drone Swarm
-# Debian Slim base (ultra-lightweight ~45MB, glibc standard for C-bindings)
-FROM python:3.12-slim
+# Debian Slim base with Python 3.14 to match host environment and falcon_py exactly
+FROM python:3.14-slim
 
 # Prevent Python from writing bytecode and buffer stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1
