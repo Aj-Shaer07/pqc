@@ -1,5 +1,5 @@
-# Multi-stage Dockerfile for PQC Drone Swarm
-# Base image with Python 3.12 (standard, highly compatible)
+# Multi-stage lightweight Dockerfile for PQC Drone Swarm
+# Debian Slim base (ultra-lightweight ~45MB, glibc standard for C-bindings)
 FROM python:3.12-slim
 
 # Prevent Python from writing bytecode and buffer stdout/stderr
@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies (build-essential needed for C extensions if any)
+# Install minimal build utilities required for C-extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY falcon_py/pyproject.toml /app/falcon_py/
 COPY pqc-drone-swarm/pyproject.toml /app/pqc-drone-swarm/
 
-# Install dependencies
+# Pre-install dependencies
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir \
     cryptography>=41.0.0 \

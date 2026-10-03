@@ -1,0 +1,48 @@
+services:
+  # MQTT Broker (Simulating the wireless RF mesh communication channel)
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    container_name: pqc_mqtt_broker
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - swarm-net
+
+  # Ground Station Node (Issues, signs, and dispatches PQC mission commands)
+  ground-station:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pqc_ground_station
+    depends_on:
+      - mqtt-broker
+    environment:
+      - MQTT_BROKER=mqtt-broker
+      - MQTT_PORT=1883
+      - NODE_ROLE=ground_station
+    networks:
+      - swarm-net
+    command: ["python3", "-m", "unittest", "tests/test_swarm.py"]
+
+  # Drone Node Template (Run scale commands to spawn N drones: docker compose up --scale drone=5)
+  drone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - mqtt-broker
+    environment:
+      - MQTT_BROKER=mqtt-broker
+      - MQTT_PORT=1883
+      - NODE_ROLE=drone
+      - THRESHOLD=3
+    networks:
+      - swarm-net
+    command: ["python3", "-m", "unittest", "tests/test_swarm.py"]
+
+networks:
+  swarm-net:
+    driver: bridge

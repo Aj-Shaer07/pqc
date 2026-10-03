@@ -80,9 +80,11 @@ python3 run_simulation.py --single -k 3 -n 5 -r 1
 
 ---
 
-## Docker Usage
+## Docker Usage & Simulation
 
-### 1. Build the Docker Image
+All docker commands are also available in [`docker_commands.sh`](docker_commands.sh).
+
+### 1. Build the Lightweight Image (Debian Slim)
 ```bash
 docker build -t pqc-drone-swarm:latest .
 ```
@@ -94,6 +96,25 @@ docker run --rm pqc-drone-swarm:latest
 
 ### 3. Run Benchmark Simulation inside Container
 ```bash
+# Single configuration (k=3, n=5)
 docker run --rm pqc-drone-swarm:latest python3 run_simulation.py --single -k 3 -n 5 -r 1
+
+# Full benchmark across all configurations (3,5), (5,10), (10,20), (25,50)
+docker run --rm pqc-drone-swarm:latest python3 run_simulation.py -r 3
 ```
+
+### 4. Multi-Container Swarm (Docker Compose)
+Spins up the Eclipse Mosquitto MQTT broker, Ground Station, and dynamically scales $N$ drone containers:
+
+```bash
+# Spin up broker, Ground Station, and 5 independent drone containers:
+docker compose up --build --scale drone=5
+
+# Spin up with 10 drone containers:
+docker compose up --scale drone=10
+
+# Tear down containers and simulated network:
+docker compose down
+```
+
 
