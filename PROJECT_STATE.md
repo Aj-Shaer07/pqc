@@ -39,7 +39,7 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 
 ## 🐳 Phase 2: Hardware Simulation via Docker (COMPLETED ✅)
 - [x] **Base Docker Image**:
-  - [x] Lightweight Debian Slim base (`python:3.12-slim`, ~45MB footprint).
+  - [x] Lightweight Debian Slim base (`python:3.14-slim` to match host Mac & falcon_py exactly).
   - [x] Pre-compiled cryptographic dependencies (`pycryptodome`, `cryptography`, `numpy`, `paho-mqtt`).
   - [x] Multi-package editable installs (`falcon_py` + `pqc-drone-swarm`).
 - [x] **Docker Compose Topology (`docker-compose.yml`)**:
