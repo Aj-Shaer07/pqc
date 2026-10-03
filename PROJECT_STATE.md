@@ -73,10 +73,24 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 
 ---
 
-## 🔬 Phase 4: Formal Security Verification (UPCOMING ⏳)
-- [ ] **BAN Logic Derivations**:
-  - [ ] Formalize idealizations, assumptions, and mathematical derivations for mutual authentication, authority, and freshness.
-- [ ] **Automated Prover Formal Modeling (Tamarin / ProVerif)**:
-  - [ ] Model the protocol under the Dolev-Yao attacker model.
-  - [ ] Formally verify secrecy of mission key and command authenticity.
-  - [ ] Verify resilience against Man-in-the-Middle (MitM) and Sybil attacks.
+## 🔬 Phase 4: Formal Security Verification & Robustness (UPCOMING ⏳)
+- [ ] **Mathematical Verification (BAN Logic)**:
+  - [ ] Formalize idealizations, assumptions, and logical derivations for mutual authentication, authority, and freshness.
+- [ ] **Automated Symbolic Verification (ProVerif / Tamarin Provers)**:
+  - [ ] Model the protocol under the **Dolev-Yao** network attacker model.
+  - [ ] Model ephemeral compromise under the **Canetti-Krawczyk (CK)** adversary model.
+  - [ ] Formally prove **Secrecy / Confidentiality** ($\text{Attacker} \not\vdash \text{mission\_key}$ when $< k$ shares compromised).
+  - [ ] Formally prove **Injective Agreement** (Mutual authentication between GS and Swarm).
+  - [ ] Formally prove **Non-Frameability / Unforgeability** (Adversary cannot forge honest drone approvals).
+  - [ ] Formally prove **Anti-Replay Invariance** across temporal sessions.
+  - [ ] Formally prove **Forward Secrecy (PFS)** of completed mission commands.
+- [ ] **Post-Quantum Cryptographic & Hardness Analysis**:
+  - [ ] Quantum bit-security quantification for Falcon-512 (Core-SVP hardness via BKZ-2.0 lattice reduction simulation).
+  - [ ] Classical vs Post-Quantum comparison (Falcon-512 vs ECDSA/RSA-2048 key size, signature size, and verification overhead).
+- [ ] **Empirical Red-Team Adversarial Test Battery (`tests/test_adversarial.py`)**:
+  - [ ] **Sybil Attack**: Injected rogue/ghost nodes attempting unauthorized approval broadcasts.
+  - [ ] **Man-in-the-Middle (MitM) Tampering**: Ciphertext/AAD payload bit-flipping detection.
+  - [ ] **Replay & Delay Attack**: Delayed injection of expired valid packets.
+  - [ ] **Byzantine Share Corruption**: Malicious nodes broadcasting corrupted Shamir shares $(x, y')$ to attempt denial-of-reconstruction.
+  - [ ] **Swarm Drop-out & Split-Brain**: Rapid dropping of $N - k + 1$ containers to verify autonomous abort and RTL fail-safe.
+
