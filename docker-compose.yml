@@ -30,7 +30,7 @@ services:
       - NODE_ROLE=ground_station
     networks:
       - swarm-net
-    command: ["python3", "-m", "unittest", "tests/test_swarm.py"]
+    command: ["python3", "run_ground_station.py"]
     deploy:
       resources:
         limits:
@@ -51,7 +51,7 @@ services:
       - THRESHOLD=3
     networks:
       - swarm-net
-    command: ["python3", "-m", "unittest", "tests/test_swarm.py"]
+    command: ["python3", "run_drone_node.py"]
     deploy:
       resources:
         limits:
