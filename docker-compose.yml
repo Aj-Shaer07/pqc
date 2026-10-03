@@ -10,6 +10,11 @@ services:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     networks:
       - swarm-net
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: '0.25'
 
   # Ground Station Node (Issues, signs, and dispatches PQC mission commands)
   ground-station:
@@ -26,8 +31,13 @@ services:
     networks:
       - swarm-net
     command: ["python3", "-m", "unittest", "tests/test_swarm.py"]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
 
-  # Drone Node Template (Run scale commands to spawn N drones: docker compose up --scale drone=5)
+  # Drone Node Template (Dynamic scaling: docker compose up --scale drone=N)
   drone:
     build:
       context: .
@@ -42,6 +52,12 @@ services:
     networks:
       - swarm-net
     command: ["python3", "-m", "unittest", "tests/test_swarm.py"]
+    deploy:
+      resources:
+        limits:
+          # Simulates constrained drone onboard companion computers (e.g. Raspberry Pi Zero 2W / CM4)
+          memory: ${DRONE_MEM_LIMIT:-256m}
+          cpus: ${DRONE_CPU_LIMIT:-0.50}
 
 networks:
   swarm-net:

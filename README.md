@@ -103,18 +103,31 @@ docker run --rm pqc-drone-swarm:latest python3 run_simulation.py --single -k 3 -
 docker run --rm pqc-drone-swarm:latest python3 run_simulation.py -r 3
 ```
 
-### 4. Multi-Container Swarm (Docker Compose)
-Spins up the Eclipse Mosquitto MQTT broker, Ground Station, and dynamically scales $N$ drone containers:
+### 4. Interactive Swarm Controller (`docker_commands.sh`)
+You can use the helper script to control container counts and hardware constraints (RAM & CPU):
 
 ```bash
-# Spin up broker, Ground Station, and 5 independent drone containers:
-docker compose up --build --scale drone=5
+# View all available commands
+./docker_commands.sh
 
-# Spin up with 10 drone containers:
-docker compose up --scale drone=10
+# Build image
+./docker_commands.sh build
 
-# Tear down containers and simulated network:
-docker compose down
+# Run unit tests inside container
+./docker_commands.sh test
+
+# Spin up 5 drones with default constraints (256MB RAM, 0.5 CPU each):
+./docker_commands.sh up 5
+
+# Simulate constrained hardware (e.g. 10 drones with 128MB RAM and 0.25 CPU each):
+./docker_commands.sh up 10 128m 0.25
+
+# View live logs across all containers:
+./docker_commands.sh logs
+
+# Tear down cluster and network:
+./docker_commands.sh down
 ```
+
 
 
