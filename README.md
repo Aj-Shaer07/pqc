@@ -77,3 +77,23 @@ python3 run_simulation.py
 # Or run a single custom configuration
 python3 run_simulation.py --single -k 3 -n 5 -r 1
 ```
+
+---
+
+## Docker Usage
+
+### 1. Build the Docker Image
+```bash
+docker build -t pqc-drone-swarm:latest .
+```
+
+### 2. Run Test Battery inside Container
+```bash
+docker run --rm pqc-drone-swarm:latest
+```
+
+### 3. Run Benchmark Simulation inside Container
+```bash
+docker run --rm pqc-drone-swarm:latest python3 run_simulation.py --single -k 3 -n 5 -r 1
+```
+
