@@ -40,7 +40,7 @@ def main():
     broker_port = int(os.getenv("MQTT_PORT", "1883"))
     threshold = int(os.getenv("THRESHOLD", "3"))
 
-    logger.info("Initializing Ground Station Node...")
+    logger.info("🛰️ Initializing Ground Station Node...")
     gs = GroundStationNode()
 
     transport = SwarmMQTTTransport(
@@ -49,6 +49,7 @@ def main():
         broker_port=broker_port,
     )
 
+    registered_drones = {}
     acknowledged_drones = set()
 
     def on_telemetry(topic: str, data: Dict[str, Any]):
@@ -60,25 +61,49 @@ def main():
 
     def on_registry(topic: str, data: Dict[str, Any]):
         drone_id = data.get("drone_id")
-        logger.info(f"[GS] 📋 Registered active drone in swarm: {drone_id}")
+        pk_hex = data.get("public_key_hex")
+        if drone_id and pk_hex:
+            registered_drones[drone_id] = pk_hex
+            logger.info(f"[GS] 📋 Registered active drone in swarm: {drone_id} (Total: {len(registered_drones)})")
 
     transport.register_handler(TOPIC_TELEMETRY, on_telemetry)
     transport.register_handler(TOPIC_REGISTRY, on_registry)
 
     transport.connect()
 
-    # Announce GS Public Key
-    time.sleep(2)
+    # Announce GS Public Key repeatedly during initialization so newly booting drones receive it
+    logger.info("[GS] 📢 Announcing GS Falcon-512 Public Key to swarm...")
+    for _ in range(3):
+        transport.publish(TOPIC_REGISTRY, {
+            "gs_public_key_hex": gs.public_key.hex(),
+        })
+        time.sleep(1)
+
+    # Wait for drone containers to initialize and register
+    logger.info("[GS] ⏳ Waiting 6 seconds for drone containers to discover network and register...")
+    time.sleep(6)
+
+    # Prepare Mission Key and Shamir Shares
+    mission_key = generate_mission_key()
+    mission_key_int = int.from_bytes(mission_key, byteorder="big")
+
+    num_drones = max(len(registered_drones), threshold)
+    shares = generate_shares(mission_key_int, threshold=threshold, num_shares=num_drones)
+
+    # Assign each registered drone a unique share
+    assigned_shares = {}
+    for idx, d_id in enumerate(registered_drones.keys()):
+        assigned_shares[d_id] = (shares[idx][0], shares[idx][1])
+
+    logger.info(f"[GS] 🗝️ Generated Shamir Shares (k={threshold}, n={num_drones}). Distributing to registered drones...")
     transport.publish(TOPIC_REGISTRY, {
+        "assigned_shares": assigned_shares,
         "gs_public_key_hex": gs.public_key.hex(),
     })
 
-    # Wait for swarm discovery
-    logger.info("[GS] Waiting 5 seconds for drone containers to initialize...")
-    time.sleep(5)
+    time.sleep(2)
 
     # Issue a Post-Quantum Encrypted Mission Command
-    mission_key = generate_mission_key()
     payload = {
         "action": "MISSION_RECON",
         "waypoints": [
@@ -88,14 +113,14 @@ def main():
         "timestamp": time.time(),
     }
 
-    logger.info("[GS] Encrypting and signing PQC mission command with Falcon-512...")
+    logger.info("[GS] 🔒 Encrypting (ChaCha20-Poly1305) and signing (Falcon-512) mission command...")
     cmd, sign_time = gs.create_command(payload, mission_key)
     logger.info(f"[GS] Command created: {cmd.command_id} (Sign time: {sign_time*1000:.2f}ms)")
 
     logger.info(f"[GS] 🚀 Broadcasting command to '{TOPIC_COMMANDS}'...")
     transport.publish(TOPIC_COMMANDS, cmd.to_dict())
 
-    # Keep alive and monitor telemetry
+    # Monitor swarm progress
     while running:
         time.sleep(1)
 
