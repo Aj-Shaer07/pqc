@@ -9,6 +9,13 @@
 *.so
 .pytest_cache/
 
+# Python packaging & build artifacts
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
 # Virtual environments
 venv/
 .venv/
@@ -19,6 +26,7 @@ env/
 .idea/
 .DS_Store
 
-# Temporary outputs
+# Temporary outputs & media
 *.csv
 system_architecture.png
+*.log

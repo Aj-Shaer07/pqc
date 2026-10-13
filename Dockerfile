@@ -21,6 +21,7 @@ COPY pqc-drone-swarm/pyproject.toml /app/pqc-drone-swarm/
 # Pre-install dependencies
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir \
+    beartype>=0.22.0 \
     cryptography>=41.0.0 \
     pycryptodome>=3.18.0 \
     numpy>=1.20.0 \
