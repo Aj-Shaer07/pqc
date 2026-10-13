@@ -106,6 +106,9 @@ def main():
         # Broadcast approval to peer drones
         transport.publish(TOPIC_APPROVALS, approval_msg.to_dict())
 
+    broadcasted_shares = set()
+    executed_commands = set()
+
     # 3. Handle peer approvals
     def on_peer_approval_received(topic: str, data: Dict[str, Any]):
         app = ApprovalMessage.from_dict(data)
@@ -118,8 +121,9 @@ def main():
             current_approvals = len(drone.peer_approvals.get(app.command_id, set()))
             logger.info(f"[{drone_id}] Verified approval from {app.drone_id} in {elapsed*1000:.2f}ms. (Total: {current_approvals}/{threshold})")
 
-            # If threshold k met for approvals, share secret share with swarm
-            if current_approvals >= threshold:
+            # If threshold k met for approvals, broadcast Shamir share once
+            if current_approvals >= threshold and app.command_id not in broadcasted_shares:
+                broadcasted_shares.add(app.command_id)
                 logger.info(f"[{drone_id}] 🎯 Threshold {threshold} met for approvals! Broadcasting Shamir share...")
                 share_msg = drone.provide_share(app.command_id)
                 transport.publish(TOPIC_SHARES, share_msg.to_dict())
@@ -127,8 +131,8 @@ def main():
     # 4. Handle peer shares & local execution
     def on_peer_share_received(topic: str, data: Dict[str, Any]):
         share_msg = ShareMessage.from_dict(data)
-        if share_msg.drone_id == drone_id:
-            return  # Skip own share
+        if share_msg.drone_id == drone_id or share_msg.command_id in executed_commands:
+            return
 
         stored = drone.receive_share(share_msg)
         if stored:
@@ -136,6 +140,7 @@ def main():
 
         # Check if local execution threshold is satisfied
         if drone.can_execute(share_msg.command_id):
+            executed_commands.add(share_msg.command_id)
             logger.info(f"[{drone_id}] ⚡ All threshold conditions satisfied! Reconstructing key and executing payload locally...")
             payload = drone.execute_command(share_msg.command_id)
             if payload:

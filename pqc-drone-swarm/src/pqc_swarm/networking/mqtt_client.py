@@ -55,11 +55,19 @@ class SwarmMQTTTransport:
         """Register a callback for incoming messages on a topic."""
         self._callbacks[topic] = handler
 
-    def connect(self) -> None:
-        """Connect to the MQTT broker and start background network loop."""
+    def connect(self, max_retries: int = 10, retry_delay: float = 1.5) -> None:
+        """Connect to the MQTT broker with retry logic and start background network loop."""
+        import time
         logger.info(f"[{self.client_id}] Connecting to MQTT broker at {self.broker_host}:{self.broker_port}...")
-        self.client.connect(self.broker_host, self.broker_port, self.keepalive)
-        self.client.loop_start()
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.client.connect(self.broker_host, self.broker_port, self.keepalive)
+                self.client.loop_start()
+                return
+            except Exception as e:
+                logger.warning(f"[{self.client_id}] Broker connection attempt {attempt}/{max_retries} failed ({e}). Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+        raise ConnectionError(f"[{self.client_id}] Failed to connect to MQTT broker after {max_retries} attempts.")
 
     def disconnect(self) -> None:
         """Stop background network loop and disconnect cleanly."""
@@ -78,19 +86,19 @@ class SwarmMQTTTransport:
         self.client.subscribe(topic, qos=qos)
         logger.info(f"[{self.client_id}] Subscribed to {topic}")
 
-    def _on_connect(self, client, userdata, flags, rc, properties=None):
-        if rc == 0:
+    def _on_connect(self, client, userdata, flags, reason_code, *args):
+        if reason_code == 0:
             self.is_connected = True
             logger.info(f"[{self.client_id}] Successfully connected to broker.")
-            # Automatically resubscribe to registered handlers
+            # Automatically subscribe to all registered handlers
             for topic in self._callbacks.keys():
                 self.client.subscribe(topic, qos=1)
         else:
-            logger.error(f"[{self.client_id}] Connection failed with code {rc}")
+            logger.error(f"[{self.client_id}] Connection failed with code {reason_code}")
 
-    def _on_disconnect(self, client, userdata, rc, properties=None):
+    def _on_disconnect(self, client, userdata, *args):
         self.is_connected = False
-        logger.warning(f"[{self.client_id}] Disconnected (rc={rc})")
+        logger.warning(f"[{self.client_id}] Disconnected from broker.")
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic

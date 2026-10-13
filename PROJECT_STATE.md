@@ -79,7 +79,7 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 - [ ] **Automated Symbolic Verification (ProVerif / Tamarin Provers)**:
   - [ ] Model the protocol under the **Dolev-Yao** network attacker model.
   - [ ] Model ephemeral compromise under the **Canetti-Krawczyk (CK)** adversary model.
-  - [ ] Formally prove **Secrecy / Confidentiality** ($\text{Attacker for all mission key}$ when $< k$ shares compromised).
+  - [ ] Formally prove **Secrecy / Confidentiality** ($\text{Attacker} \not\vdash \text{mission\_key}$ when $< k$ shares compromised).
   - [ ] Formally prove **Injective Agreement** (Mutual authentication between GS and Swarm).
   - [ ] Formally prove **Non-Frameability / Unforgeability** (Adversary cannot forge honest drone approvals).
   - [ ] Formally prove **Anti-Replay Invariance** across temporal sessions.
