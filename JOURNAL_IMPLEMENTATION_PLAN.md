@@ -165,7 +165,7 @@ Every drone node precisely instruments execution phases using high-resolution pe
 4. **Lagrange Reconstruction Latency (`reconstruct_time_ms`):** Duration of modular polynomial interpolation over $\mathbb{F}_p$ across $k$ shares.
 5. **ChaCha20-Poly1305 Decryption Latency (`decrypt_time_ms`):** Symmetric authenticated decryption time for mission payloads.
 6. **Total End-to-End Consensus Latency (`total_consensus_time_ms`):** Duration from Ground Station broadcast dispatch to decentralized payload execution on the drone:
-   $$\Delta T_{\text{consensus}} = t_{\text{executed}} - t_{\text{command\_dispatched}}$$
+   $$\Delta T_{\text{consensus}} = t_{\text{executed}} - t_{\text{dispatched}}$$
 
 ---
 
