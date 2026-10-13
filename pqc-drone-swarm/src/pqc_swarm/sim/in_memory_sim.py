@@ -10,19 +10,20 @@ from pqc_swarm.nodes.ground_station import GroundStationNode
 from pqc_swarm.nodes.drone import DroneNode
 
 
-def run_decentralized_simulation(k: int = 3, n: int = 5) -> Dict[str, Any]:
+def run_decentralized_simulation(k: int = 3, n: int = 5, use_encrypted_shares: bool = True) -> Dict[str, Any]:
     """
     Executes a fully decentralized in-memory round:
     1. GS issues and signs command.
     2. Drones independently verify GS signature.
     3. Drones generate approvals and broadcast to peers.
     4. Each drone verifies peer approvals independently (no central threshold engine).
-    5. Shares are distributed and validated.
+    5. Shares are distributed and validated with ChaCha20-Poly1305 broadcast encryption.
     6. Each drone reconstructs mission key and decrypts locally.
     """
     trust_registry = TrustRegistry()
     mission_key = generate_mission_key()
     mission_key_int = int.from_bytes(mission_key, byteorder="big")
+    mesh_key = generate_mission_key() if use_encrypted_shares else None
 
     shares = generate_shares(mission_key_int, threshold=k, num_shares=n)
 
@@ -34,6 +35,7 @@ def run_decentralized_simulation(k: int = 3, n: int = 5) -> Dict[str, Any]:
             share=share,
             threshold=k,
             trust_registry=trust_registry,
+            mesh_key=mesh_key,
         )
         drones.append(drone)
 

@@ -50,6 +50,11 @@ def main():
 
     trust_registry = TrustRegistry()
     
+    mesh_key_hex = os.getenv("SWARM_MESH_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    mesh_key = bytes.fromhex(mesh_key_hex) if mesh_key_hex else None
+    if mesh_key:
+        logger.info(f"[{drone_id}] 🔐 Swarm Broadcast Mesh Key configured (Wire Confidentiality active).")
+
     # Initialize Drone with dummy share initially; real share provided via GS registry or derived
     # We assign dynamic share index based on hash or container instance
     node_index = abs(hash(drone_id)) % 1000 + 1
@@ -59,6 +64,7 @@ def main():
         share=(node_index, 0),
         threshold=threshold,
         trust_registry=trust_registry,
+        mesh_key=mesh_key,
     )
 
     transport = SwarmMQTTTransport(
@@ -92,13 +98,33 @@ def main():
 
     # 2. Handle incoming GS command
     def on_command_received(topic: str, data: Dict[str, Any]):
-        cmd = CommandMessage.from_dict(data)
+        try:
+            cmd = CommandMessage.from_dict(data)
+        except Exception as e:
+            logger.warning(f"[{drone_id}] 🛡️ Malformed mission command rejected ({type(e).__name__}: {e})")
+            transport.publish(TOPIC_TELEMETRY, {
+                "drone_id": drone_id,
+                "event": "SECURITY_ALERT",
+                "alert_type": "MALFORMED_COMMAND",
+                "reason": str(e),
+                "timestamp": time.time(),
+            })
+            return
+
         logger.info(f"[{drone_id}] 📩 Received mission command: {cmd.command_id}")
 
         is_valid, elapsed = drone.verify_gs_command(cmd)
         if not is_valid:
             reason = drone.last_rejection_reason or "Verification failed"
             logger.warning(f"[{drone_id}] ❌ Command {cmd.command_id} rejected ({reason}). Ignoring.")
+            transport.publish(TOPIC_TELEMETRY, {
+                "drone_id": drone_id,
+                "event": "SECURITY_ALERT",
+                "alert_type": "COMMAND_REJECTED",
+                "reason": reason,
+                "command_id": cmd.command_id,
+                "timestamp": time.time(),
+            })
             return
 
         logger.info(f"[{drone_id}] ✅ Verified GS Falcon signature in {elapsed*1000:.2f}ms. Broadcasting approval...")
@@ -112,7 +138,19 @@ def main():
 
     # 3. Handle peer approvals
     def on_peer_approval_received(topic: str, data: Dict[str, Any]):
-        app = ApprovalMessage.from_dict(data)
+        try:
+            app = ApprovalMessage.from_dict(data)
+        except Exception as e:
+            logger.warning(f"[{drone_id}] 🛡️ Malformed peer approval rejected ({type(e).__name__}: {e})")
+            transport.publish(TOPIC_TELEMETRY, {
+                "drone_id": drone_id,
+                "event": "SECURITY_ALERT",
+                "alert_type": "MALFORMED_APPROVAL",
+                "reason": str(e),
+                "timestamp": time.time(),
+            })
+            return
+
         if app.drone_id == drone_id:
             return  # Skip own approval
 
@@ -131,16 +169,50 @@ def main():
         else:
             reason = drone.last_rejection_reason or "Invalid peer approval"
             logger.warning(f"[{drone_id}] ⚠️ Peer approval from {app.drone_id} rejected: {reason}")
+            transport.publish(TOPIC_TELEMETRY, {
+                "drone_id": drone_id,
+                "event": "SECURITY_ALERT",
+                "alert_type": "APPROVAL_REJECTED",
+                "reason": reason,
+                "source_peer": app.drone_id,
+                "command_id": app.command_id,
+                "timestamp": time.time(),
+            })
 
     # 4. Handle peer shares & local execution
     def on_peer_share_received(topic: str, data: Dict[str, Any]):
-        share_msg = ShareMessage.from_dict(data)
+        try:
+            share_msg = ShareMessage.from_dict(data)
+        except Exception as e:
+            logger.warning(f"[{drone_id}] 🛡️ Malformed peer share rejected ({type(e).__name__}: {e})")
+            transport.publish(TOPIC_TELEMETRY, {
+                "drone_id": drone_id,
+                "event": "SECURITY_ALERT",
+                "alert_type": "MALFORMED_SHARE",
+                "reason": str(e),
+                "timestamp": time.time(),
+            })
+            return
+
         if share_msg.drone_id == drone_id or share_msg.command_id in executed_commands:
             return
 
         stored = drone.receive_share(share_msg)
         if stored:
-            logger.info(f"[{drone_id}] 📥 Verified & accepted Shamir share from {share_msg.drone_id}")
+            enc_tag = "🔒 AEAD Encrypted" if share_msg.is_encrypted else "Plaintext"
+            logger.info(f"[{drone_id}] 📥 Verified & accepted Shamir share from {share_msg.drone_id} ({enc_tag})")
+        else:
+            reason = drone.last_rejection_reason or "Verification failed"
+            logger.warning(f"[{drone_id}] ❌ Rejected share from {share_msg.drone_id}: {reason}")
+            transport.publish(TOPIC_TELEMETRY, {
+                "drone_id": drone_id,
+                "event": "SECURITY_ALERT",
+                "alert_type": "SHARE_REJECTED",
+                "reason": reason,
+                "source_peer": share_msg.drone_id,
+                "command_id": share_msg.command_id,
+                "timestamp": time.time(),
+            })
 
         # Check if local execution threshold is satisfied
         if drone.can_execute(share_msg.command_id):

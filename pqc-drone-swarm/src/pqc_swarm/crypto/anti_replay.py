@@ -17,19 +17,19 @@ class AntiReplayFilter:
         self._replays_detected: int = 0
         self._expired_rejected: int = 0
 
-    def validate_and_record(
+    def check_freshness(
         self,
         identifier: str,
         timestamp: float,
         current_time: Optional[float] = None,
     ) -> Tuple[bool, str]:
         """
-        Validate that the message is fresh and has not been seen before.
-        Returns (is_valid, reason).
+        Check that the message timestamp is fresh and identifier has not been processed.
+        Does not record identifier yet (prevents DoS on invalid signatures).
         """
         now = time.time() if current_time is None else float(current_time)
 
-        # 1. Check for timestamps too far in the future (clock skew/manipulation)
+        # 1. Check for timestamps too far in the future
         if timestamp > now + self.window_seconds:
             self._expired_rejected += 1
             skew = timestamp - now
@@ -46,13 +46,40 @@ class AntiReplayFilter:
             self._replays_detected += 1
             return False, f"Replay detected: identifier '{identifier}' already processed"
 
-        # Record valid identifier
-        self._seen[identifier] = timestamp
+        return True, "OK"
 
-        # Inline light cleanup if cache grows
+    def record_seen(
+        self,
+        identifier: str,
+        timestamp: float,
+        current_time: Optional[float] = None,
+    ) -> None:
+        """Record an authenticated identifier into seen cache."""
+        now = time.time() if current_time is None else float(current_time)
+        self._seen[identifier] = timestamp
         if len(self._seen) > 256:
             self.cleanup(current_time=now)
 
+    def forget(self, identifier: str) -> None:
+        """Remove identifier from seen cache (e.g. if signature validation subsequently fails)."""
+        if identifier in self._seen:
+            del self._seen[identifier]
+
+    def validate_and_record(
+        self,
+        identifier: str,
+        timestamp: float,
+        current_time: Optional[float] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Validate that the message is fresh and has not been seen before, recording it atomically.
+        Returns (is_valid, reason).
+        """
+        is_fresh, reason = self.check_freshness(identifier, timestamp, current_time=current_time)
+        if not is_fresh:
+            return False, reason
+
+        self.record_seen(identifier, timestamp, current_time=current_time)
         return True, "OK"
 
     def cleanup(self, current_time: Optional[float] = None) -> int:

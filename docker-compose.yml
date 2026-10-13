@@ -28,6 +28,7 @@ services:
       - MQTT_BROKER=mqtt-broker
       - MQTT_PORT=1883
       - NODE_ROLE=ground_station
+      - SWARM_MESH_KEY=${SWARM_MESH_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
     networks:
       - swarm-net
     command: ["python3", "run_ground_station.py"]
@@ -49,6 +50,7 @@ services:
       - MQTT_PORT=1883
       - NODE_ROLE=drone
       - THRESHOLD=3
+      - SWARM_MESH_KEY=${SWARM_MESH_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
     networks:
       - swarm-net
     command: ["python3", "run_drone_node.py"]
@@ -61,4 +63,5 @@ services:
 
 networks:
   swarm-net:
+    name: swarm-net
     driver: bridge

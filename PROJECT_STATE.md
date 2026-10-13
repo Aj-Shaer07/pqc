@@ -59,9 +59,23 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 - [x] **Replay Attack Defense**:
   - [x] Enforce timestamp freshness validity windows (e.g. within $\pm 5$ seconds).
   - [x] Local nonce caching table to reject replayed commands and approvals with automatic TTL pruning.
-- [ ] **Broadcast Encryption**:
-  - [ ] Encrypt MQTT broadcast traffic (pre-shared mesh session key or TLS) to protect shares from passive eavesdropping.
-- [ ] **Rogue Ground Station Defense**:
+- [x] **Broadcast Encryption**:
+  - [x] Encrypt MQTT broadcast traffic (`swarm/shares`) via ChaCha20-Poly1305 AEAD under Swarm Mesh Session Key ($K_{\text{mesh}}$) to protect Shamir coordinates $(x, y)$ from passive eavesdropping.
+  - [x] Zero-leakage wire serialization: Plaintext coordinates $(x, y)$ are omitted from network dictionaries when encrypted.
+  - [x] AEAD authentication and anti-replay validation on received shares; rejection of tampered shares and unauthorized eavesdroppers without $K_{\text{mesh}}$.
+- [x] **Distributed Security Alert Telemetry**:
+  - [x] Real-time `SECURITY_ALERT` emission over `swarm/telemetry` for invalid signatures, AEAD MAC tag failures, replay duplicates, and untrusted peers.
+  - [x] Ground Station telemetry harvester captures and logs live security alerts across the cluster.
+- [x] **Anti-DoS Nonce Exhaustion Protection**:
+  - [x] Strict decoupling of freshness checking (`check_freshness()`) from state commitment (`record_seen()`), ensuring unauthenticated packets cannot burn legitimate nonces.
+- [x] **Empirical Red-Team Adversarial Test Battery (`simulate_adversary.py`)**:
+  - [x] **Wire Sniffing & Shannon Entropy Analysis**: Proves zero plaintext coordinate leakage and $H(X) \approx 6.88$–$7.99$ bits/byte indistinguishability.
+  - [x] **Rogue Node Isolation (Ingress & Egress)**: Evaluates both ingress decryption failure (`InvalidTag`) and egress live-swarm rejection of rogue share injections.
+  - [x] **MitM Ciphertext Tampering**: Proves dual-layer rejection (Falcon-512 signature failure & Poly1305 MAC tag failure).
+  - [x] **Temporal Replay Attack**: Demonstrates `AntiReplayFilter` state rejection of replayed authentic packets with valid signatures.
+  - [x] **Unauthorized Ground Station Forgery**: Validates swarm-wide rejection of commands signed by unpinned Falcon-512 keys.
+  - [x] **Standalone Multi-Vector Battery**: In-memory test harness (`./docker_commands.sh attack demo`) passing 100%.
+- [ ] **Rogue Ground Station Defense (Autonomous Safety)**:
   - [ ] Autonomous safety policies & geofence checks (drones reject out-of-boundary commands even if signed by GS).
   - [ ] Multi-operator signature verification (require $M$-of-$N$ GS signatures).
 - [ ] **Dynamic Swarm Membership**:
@@ -93,10 +107,7 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 - [ ] **Post-Quantum Cryptographic & Hardness Analysis**:
   - [ ] Quantum bit-security quantification for Falcon-512 (Core-SVP hardness via BKZ-2.0 lattice reduction simulation).
   - [ ] Classical vs Post-Quantum comparison (Falcon-512 vs ECDSA/RSA-2048 key size, signature size, and verification overhead).
-- [ ] **Empirical Red-Team Adversarial Test Battery**:
-  - [ ] **Sybil Attack**: Injected rogue/ghost nodes attempting unauthorized approval broadcasts.
-  - [ ] **Man-in-the-Middle (MitM) Tampering**: Ciphertext/AAD payload bit-flipping detection.
-  - [ ] **Replay & Delay Attack**: Delayed injection of expired valid packets.
+- [ ] **Advanced Swarm Fault Tolerance**:
   - [ ] **Byzantine Share Corruption**: Malicious nodes broadcasting corrupted Shamir shares $(x, y')$ to attempt denial-of-reconstruction.
   - [ ] **Swarm Drop-out & Split-Brain**: Rapid dropping of $N - k + 1$ containers to verify autonomous abort and RTL fail-safe.
 

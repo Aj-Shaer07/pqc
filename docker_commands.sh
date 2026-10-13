@@ -25,14 +25,21 @@ show_help() {
     echo "  sim-all                Run full paper benchmarks (all configs, k/n)"
     echo "  up [N] [MEM] [CPUS]    Start multi-container swarm with N drones"
     echo "                         (Defaults: N=$DEFAULT_DRONES, MEM=$DEFAULT_MEMORY, CPUS=$DEFAULT_CPUS)"
+    echo "  attack [demo|eavesdrop|tamper|wrong-key|replay|rogue-gs] [DUR] [TARGET]"
+    echo "                         Run Red-Team attack battery against the swarm (defaults: demo)"
     echo "  down                   Stop and remove all swarm containers & network"
     echo "  logs                   Follow real-time logs from all swarm nodes"
     echo ""
     echo "Examples:"
     echo "  ./docker_commands.sh build"
     echo "  ./docker_commands.sh test"
+    echo "  ./docker_commands.sh attack demo         # In-memory security validation battery"
+    echo "  ./docker_commands.sh attack eavesdrop 30 # Sniff MQTT traffic on running cluster"
+    echo "  ./docker_commands.sh attack tamper 30 all# Active MitM ciphertext injection"
+    echo "  ./docker_commands.sh attack wrong-key 30 # Rogue container with invalid key"
+    echo "  ./docker_commands.sh attack replay 30    # Temporal replay of valid signed shares"
+    echo "  ./docker_commands.sh attack rogue-gs 20  # Forged Ground Station command injection"
     echo "  ./docker_commands.sh up 5                # Spin up 5 drones with 256MB RAM each"
-    echo "  ./docker_commands.sh up 10 512m 1.0      # Spin up 10 drones with 512MB RAM & 1 CPU each"
     echo "  ./docker_commands.sh down"
     echo "================================================================="
     echo ""
@@ -49,6 +56,31 @@ case "$CMD" in
     test)
         echo "[*] Running unit test battery inside isolated container..."
         docker run --rm pqc-drone-swarm:latest
+        ;;
+
+    attack)
+        MODE=${2:-demo}
+        DUR=${3:-25}
+        TARGET=${4:-all}
+        echo "[*] Running Red-Team adversary simulation (Mode: $MODE, Target: $TARGET)..."
+        if [ "$MODE" = "demo" ]; then
+            docker run --rm -v "$PWD/pqc-drone-swarm:/app/pqc-drone-swarm" pqc-drone-swarm:latest python3 simulate_adversary.py --mode demo
+        else
+            # Verify that the swarm cluster is actually active
+            if ! docker ps --format '{{.Names}}' | grep -q 'pqc_mqtt_broker'; then
+                echo ""
+                echo "⚠️  [WARNING] The live swarm cluster is NOT running!"
+                echo "   The attack modes (wrong-key, tamper, eavesdrop) connect to live containers on 'swarm-net'."
+                echo "   To start the swarm cluster, run:"
+                echo "      ./docker_commands.sh up 5"
+                echo ""
+                echo "   Alternatively, to run the self-contained security battery without a cluster, use:"
+                echo "      ./docker_commands.sh attack demo"
+                echo ""
+                exit 1
+            fi
+            docker run --rm --network swarm-net -v "$PWD/pqc-drone-swarm:/app/pqc-drone-swarm" -e MQTT_BROKER=mqtt-broker pqc-drone-swarm:latest python3 simulate_adversary.py --mode "$MODE" --duration "$DUR" --target "$TARGET"
+        fi
         ;;
 
     sim-single)

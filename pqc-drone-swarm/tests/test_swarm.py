@@ -206,15 +206,125 @@ class TestPQCDroneSwarm(unittest.TestCase):
         self.assertEqual(metrics["approvals_count"], 2)
 
     def test_decentralized_swarm_simulation_round(self):
-        res = run_decentralized_simulation(k=3, n=5)
-        self.assertEqual(res["k"], 3)
-        self.assertEqual(res["n"], 5)
-        self.assertEqual(res["executed_count"], 5)  # All 5 drones successfully verified & executed
-        self.assertGreater(res["gs_sign"], 0)
-        self.assertGreater(res["drone_verify_avg"], 0)
-        self.assertGreater(res["drone_approve_avg"], 0)
+        # Test with broadcast encryption active
+        res_enc = run_decentralized_simulation(k=3, n=5, use_encrypted_shares=True)
+        self.assertEqual(res_enc["k"], 3)
+        self.assertEqual(res_enc["n"], 5)
+        self.assertEqual(res_enc["executed_count"], 5)
+        self.assertGreater(res_enc["gs_sign"], 0)
+        self.assertGreater(res_enc["drone_verify_avg"], 0)
+        self.assertGreater(res_enc["drone_approve_avg"], 0)
+
+        # Test plaintext backward compatibility
+        res_plain = run_decentralized_simulation(k=3, n=5, use_encrypted_shares=False)
+        self.assertEqual(res_plain["executed_count"], 5)
+
+    def test_encrypted_share_message_wire_format(self):
+        """Verify that encrypted ShareMessage never exposes plaintext (x, y) on the wire."""
+        mesh_key = generate_mission_key()
+        registry = TrustRegistry()
+        d = DroneNode("DRONE_1", share=(5, 99999), threshold=2, trust_registry=registry, mesh_key=mesh_key)
+
+        share_msg = d.provide_share("cmd-test-1")
+        self.assertTrue(share_msg.is_encrypted)
+        self.assertEqual(share_msg.x, 0)
+        self.assertEqual(share_msg.y, 0)
+        self.assertTrue(len(share_msg.ciphertext_hex) > 0)
+        self.assertTrue(len(share_msg.nonce_hex) == 24)  # 12 bytes = 24 hex chars
+
+        # Test wire dict serialization
+        wire_dict = share_msg.to_dict()
+        self.assertNotIn("x", wire_dict, "Plaintext coordinate x MUST NOT be leaked on wire dict")
+        self.assertNotIn("y", wire_dict, "Plaintext coordinate y MUST NOT be leaked on wire dict")
+        self.assertTrue(wire_dict["is_encrypted"])
+        self.assertEqual(wire_dict["nonce_hex"], share_msg.nonce_hex)
+        self.assertEqual(wire_dict["ciphertext_hex"], share_msg.ciphertext_hex)
+
+        # Test reconstruction from wire dict
+        reconstructed = ShareMessage.from_dict(wire_dict)
+        self.assertTrue(reconstructed.is_encrypted)
+        self.assertEqual(reconstructed.ciphertext_hex, share_msg.ciphertext_hex)
+
+    def test_broadcast_share_encryption_eavesdropper_prevention(self):
+        """Verify that only nodes with mesh_key can decrypt shares, blocking passive wire eavesdroppers."""
+        mesh_key = generate_mission_key()
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        registry.set_gs_public_key(gs.public_key)
+
+        mission_key = generate_mission_key()
+        mission_key_int = int.from_bytes(mission_key, byteorder="big")
+        shares = generate_shares(mission_key_int, threshold=2, num_shares=2)
+
+        d1 = DroneNode("DRONE_1", share=shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+        d2 = DroneNode("DRONE_2", share=shares[1], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+        registry.register_drone(d1.drone_id, d1.public_key)
+        registry.register_drone(d2.drone_id, d2.public_key)
+
+        payload = {"action": "SURVEILLANCE"}
+        cmd, _ = gs.create_command(payload, mission_key)
+        d1.verify_gs_command(cmd)
+        d2.verify_gs_command(cmd)
+
+        app1, _ = d1.create_approval(cmd.command_id)
+        app2, _ = d2.create_approval(cmd.command_id)
+        d1.process_peer_approval(app2)
+        d2.process_peer_approval(app1)
+
+        # D2 publishes encrypted share
+        encrypted_share = d2.provide_share(cmd.command_id)
+        wire_data = encrypted_share.to_dict()
+
+        # Eavesdropper sniffing MQTT wire sees wire_data without x, y
+        self.assertNotIn("x", wire_data)
+        self.assertNotIn("y", wire_data)
+
+        # Eavesdropper node without mesh_key attempts to receive share
+        eavesdropper = DroneNode("ROGUE", share=(99, 12345), threshold=2, trust_registry=registry, mesh_key=None)
+        accepted = eavesdropper.receive_share(ShareMessage.from_dict(wire_data))
+        self.assertFalse(accepted, "Node without mesh_key must not be able to accept/decrypt encrypted share")
+        self.assertIn("no mesh_key configured", eavesdropper.last_rejection_reason)
+
+        # Legitimate D1 with mesh_key receives and decrypts successfully
+        d1_accepted = d1.receive_share(ShareMessage.from_dict(wire_data))
+        self.assertTrue(d1_accepted)
+        self.assertTrue(d1.can_execute(cmd.command_id))
+
+        exec_res = d1.execute_command(cmd.command_id)
+        self.assertEqual(exec_res, payload)
+
+    def test_broadcast_share_tampering_and_wrong_key_rejection(self):
+        """Verify that corrupted ciphertext or wrong mesh_key fails AEAD and is rejected."""
+        valid_mesh_key = generate_mission_key()
+        wrong_mesh_key = generate_mission_key()
+
+        registry = TrustRegistry()
+        d1 = DroneNode("DRONE_1", share=(1, 500), threshold=2, trust_registry=registry, mesh_key=valid_mesh_key)
+        d2 = DroneNode("DRONE_2", share=(2, 600), threshold=2, trust_registry=registry, mesh_key=wrong_mesh_key)
+        registry.register_drone(d1.drone_id, d1.public_key)
+        registry.register_drone(d2.drone_id, d2.public_key)
+
+        share_msg = d1.provide_share("cmd_tamper_test")
+
+        # 1. Receiver with wrong mesh_key fails AEAD decryption
+        accepted_wrong_key = d2.receive_share(share_msg)
+        self.assertFalse(accepted_wrong_key)
+        self.assertIn("authentication failure", d2.last_rejection_reason)
+
+        # 2. Tampered ciphertext fails signature / AEAD
+        raw_dict = share_msg.to_dict()
+        # Flip hex character in ciphertext
+        corrupted_ct = list(raw_dict["ciphertext_hex"])
+        corrupted_ct[0] = "f" if corrupted_ct[0] != "f" else "0"
+        raw_dict["ciphertext_hex"] = "".join(corrupted_ct)
+
+        tampered_msg = ShareMessage.from_dict(raw_dict)
+        # Receiver with valid key rejects tampered message
+        accepted_tampered = d1.receive_share(tampered_msg)
+        self.assertFalse(accepted_tampered)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

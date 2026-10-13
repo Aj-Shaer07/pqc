@@ -39,6 +39,9 @@ def main():
     broker_host = os.getenv("MQTT_BROKER", "localhost")
     broker_port = int(os.getenv("MQTT_PORT", "1883"))
     threshold = int(os.getenv("THRESHOLD", "3"))
+    mesh_key_hex = os.getenv("SWARM_MESH_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    if mesh_key_hex:
+        logger.info("🔐 Swarm Broadcast Mesh Key active (Wire Confidentiality enabled across swarm).")
 
     logger.info("🛰️ Initializing Ground Station Node...")
     gs = GroundStationNode()
@@ -54,6 +57,12 @@ def main():
 
     def on_telemetry(topic: str, data: Dict[str, Any]):
         drone_id = data.get("drone_id")
+        if data.get("event") == "SECURITY_ALERT":
+            alert_type = data.get("alert_type")
+            reason = data.get("reason")
+            logger.warning(f"[GS] 🚨 SECURITY ALERT from {drone_id}: {alert_type} ({reason})")
+            return
+
         cid = data.get("command_id")
         status = data.get("status")
         metrics = data.get("metrics", {})
@@ -107,31 +116,56 @@ def main():
         "gs_public_key_hex": gs.public_key.hex(),
     })
 
+    command_seq = 0
+
+    def dispatch_mission(action: str = "MISSION_RECON"):
+        nonlocal command_seq
+        command_seq += 1
+        now = time.time()
+        payload = {
+            "action": action,
+            "seq": command_seq,
+            "waypoints": [
+                {"lat": 37.7749 + (command_seq * 0.001), "lon": -122.4194, "alt": 100},
+                {"lat": 37.7755, "lon": -122.4180 + (command_seq * 0.001), "alt": 120},
+            ],
+            "timestamp": now,
+        }
+
+        logger.info(f"[GS] 🔒 Encrypting (ChaCha20-Poly1305) & signing (Falcon-512) mission command #{command_seq} ({action})...")
+        cmd, sign_time = gs.create_command(payload, mission_key)
+        logger.info(f"[GS] Command created: {cmd.command_id} (Sign time: {sign_time*1000:.2f}ms)")
+        logger.info(f"[GS] 🚀 Broadcasting command to '{TOPIC_COMMANDS}'...")
+        transport.publish(TOPIC_COMMANDS, cmd.to_dict())
+
+    # Listen for on-demand mission triggers (e.g. from adversary or test harnesses)
+    def on_trigger(topic: str, data: Dict[str, Any]):
+        reason = data.get("reason", "manual_trigger")
+        logger.info(f"[GS] ⚡ Live mission dispatch requested ({reason}).")
+        dispatch_mission(f"MISSION_{reason.upper()}")
+
+    transport.register_handler("swarm/trigger", on_trigger)
+
     time.sleep(2)
 
-    # Issue a Post-Quantum Encrypted Mission Command
-    payload = {
-        "action": "MISSION_RECON",
-        "waypoints": [
-            {"lat": 37.7749, "lon": -122.4194, "alt": 100},
-            {"lat": 37.7755, "lon": -122.4180, "alt": 120},
-        ],
-        "timestamp": time.time(),
-    }
+    # Issue Initial Mission Command
+    dispatch_mission("MISSION_INITIAL_RECON")
 
-    logger.info("[GS] 🔒 Encrypting (ChaCha20-Poly1305) and signing (Falcon-512) mission command...")
-    cmd, sign_time = gs.create_command(payload, mission_key)
-    logger.info(f"[GS] Command created: {cmd.command_id} (Sign time: {sign_time*1000:.2f}ms)")
+    # Periodic dispatch loop (every 20s) to keep live swarm active
+    last_dispatch = time.time()
+    dispatch_interval = int(os.getenv("DISPATCH_INTERVAL", "20"))
 
-    logger.info(f"[GS] 🚀 Broadcasting command to '{TOPIC_COMMANDS}'...")
-    transport.publish(TOPIC_COMMANDS, cmd.to_dict())
-
-    # Monitor swarm progress
+    logger.info(f"[GS] Active and listening for swarm events (Periodic waypoint interval: {dispatch_interval}s)...")
     while running:
         time.sleep(1)
+        if dispatch_interval > 0 and (time.time() - last_dispatch >= dispatch_interval):
+            last_dispatch = time.time()
+            logger.info("[GS] ⏰ Dispatching periodic waypoint patrol...")
+            dispatch_mission("MISSION_PATROL_WAYPOINT")
 
     transport.disconnect()
     logger.info("[GS] Ground Station stopped.")
+
 
 
 if __name__ == "__main__":
