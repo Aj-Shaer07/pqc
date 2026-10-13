@@ -3,6 +3,7 @@
 from pqc_swarm.crypto.falcon import FalconSigner
 from pqc_swarm.crypto.sss import generate_shares, reconstruct_secret, PRIME
 from pqc_swarm.crypto.aead import generate_mission_key, encrypt_payload, decrypt_payload
+from pqc_swarm.crypto.anti_replay import AntiReplayFilter
 
 __all__ = [
     "FalconSigner",
@@ -12,4 +13,6 @@ __all__ = [
     "generate_mission_key",
     "encrypt_payload",
     "decrypt_payload",
+    "AntiReplayFilter",
 ]
+

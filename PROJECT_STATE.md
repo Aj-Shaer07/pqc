@@ -55,10 +55,10 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 
 ---
 
-## 🛡️ Phase 3: Protocol Hardening & Swarm Resilience (UP NEXT ⏳)
-- [ ] **Replay Attack Defense**:
-  - [ ] Enforce timestamp freshness validity windows (e.g. within $\pm 5$ seconds).
-  - [ ] Local nonce caching table to reject replayed commands and approvals.
+## 🛡️ Phase 3: Protocol Hardening & Swarm Resilience (IN PROGRESS 🟡)
+- [x] **Replay Attack Defense**:
+  - [x] Enforce timestamp freshness validity windows (e.g. within $\pm 5$ seconds).
+  - [x] Local nonce caching table to reject replayed commands and approvals with automatic TTL pruning.
 - [ ] **Broadcast Encryption**:
   - [ ] Encrypt MQTT broadcast traffic (pre-shared mesh session key or TLS) to protect shares from passive eavesdropping.
 - [ ] **Rogue Ground Station Defense**:
@@ -70,6 +70,12 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 - [ ] **Node Drop-out & Fail-safe Handling**:
   - [ ] Swarm fault tolerance testing (active drones $\ge k \implies$ mission proceeds).
   - [ ] Autonomous Return-to-Launch (RTL) trigger when active drones $< k$.
+- [ ] **Performance Measurement & Telemetry Metrics**:
+  - [x] **Cryptographic & Protocol Latency**: Quantify Falcon-512 signing/verification, SSS Lagrange reconstruction, and AEAD encryption/decryption durations per node.
+  - [x] **End-to-End Consensus Time**: Measure latency from Ground Station command dispatch $\to$ peer approvals $\to$ share exchange $\to$ decentralized execution across $N$ nodes.
+  - [ ] **Network & Bandwidth Overhead**: Profile payload wire sizes (Falcon public key ~897B, signature ~666B, ciphertext, encrypted shares) and MQTT topic traffic volume.
+  - [ ] **Hardware Resource Profiling**: Track per-container CPU utilization spikes and RAM RSS (MB) under throttled Docker constraints (e.g., 256MB/512MB RAM, 0.5/1.0 CPUs).
+  - [x] **Automated Metrics Telemetry**: Collect distributed metrics via `swarm/telemetry` and report timing breakdowns on Ground Station.
 
 ---
 

@@ -1,10 +1,11 @@
-"""Autonomous Drone Node with decentralized threshold verification and execution."""
+"""Autonomous Drone Node with decentralized threshold verification, anti-replay, and execution."""
 
 import time
 from typing import Dict, List, Optional, Set, Tuple, Any
 from pqc_swarm.crypto.falcon import FalconSigner
 from pqc_swarm.crypto.sss import reconstruct_secret
 from pqc_swarm.crypto.aead import decrypt_payload
+from pqc_swarm.crypto.anti_replay import AntiReplayFilter
 from pqc_swarm.models.messages import CommandMessage, ApprovalMessage, ShareMessage
 from pqc_swarm.models.registry import TrustRegistry
 
@@ -12,8 +13,9 @@ from pqc_swarm.models.registry import TrustRegistry
 class DroneNode:
     """
     Decentralized Autonomous Drone.
-    Holds its own keypair, Shamir share, and trust registry.
-    Independently verifies GS commands, checks peer approvals, and executes payload upon reaching threshold.
+    Holds its own keypair, Shamir share, trust registry, and anti-replay filter.
+    Independently verifies GS commands, checks peer approvals, profiles performance metrics,
+    and executes payload upon reaching threshold.
     """
 
     def __init__(
@@ -23,12 +25,15 @@ class DroneNode:
         threshold: int,
         trust_registry: TrustRegistry,
         signer: Optional[FalconSigner] = None,
+        anti_replay: Optional[AntiReplayFilter] = None,
+        freshness_window_sec: float = 5.0,
     ):
         self.drone_id = drone_id
         self.share = share  # (x, y)
         self.threshold = threshold
         self.trust_registry = trust_registry
         self.signer = signer or FalconSigner(512)
+        self.anti_replay = anti_replay or AntiReplayFilter(window_seconds=freshness_window_sec)
 
         start = time.perf_counter()
         self.private_key, self.public_key = self.signer.keygen()
@@ -45,27 +50,67 @@ class DroneNode:
         # Cached active commands: command_id -> CommandMessage
         self.known_commands: Dict[str, CommandMessage] = {}
 
-    def verify_gs_command(self, command: CommandMessage) -> Tuple[bool, float]:
+        # Detailed performance metrics per command_id
+        self.command_metrics: Dict[str, Dict[str, Any]] = {}
+        self.last_rejection_reason: Optional[str] = None
+
+    def verify_gs_command(
+        self,
+        command: CommandMessage,
+        current_time: Optional[float] = None,
+    ) -> Tuple[bool, float]:
         """
-        Verify the Ground Station signature on an incoming command.
+        Verify the Ground Station signature on an incoming command with anti-replay checks.
         Returns (is_valid, elapsed_seconds).
         """
+        start = time.perf_counter()
+
+        # 1. Anti-Replay and Freshness verification
+        cmd_identifier = f"CMD:{command.command_id}:{command.nonce_hex}"
+        is_fresh, reason = self.anti_replay.validate_and_record(
+            cmd_identifier, command.timestamp, current_time=current_time
+        )
+        if not is_fresh:
+            self.last_rejection_reason = reason
+            elapsed = time.perf_counter() - start
+            return False, elapsed
+
+        # 2. Check Ground Station Public Key
         if not self.trust_registry.gs_public_key:
-            return False, 0.0
+            self.last_rejection_reason = "No GS public key in trust registry"
+            elapsed = time.perf_counter() - start
+            return False, elapsed
 
         gs_pk = self.trust_registry.gs_public_key
         sig_bytes = bytes.fromhex(command.gs_signature_hex)
 
-        start = time.perf_counter()
+        # 3. Falcon-512 Signature verification
         is_valid = self.signer.verify(gs_pk, command.digest(), sig_bytes)
         elapsed = time.perf_counter() - start
 
         if is_valid:
+            self.last_rejection_reason = None
             self.known_commands[command.command_id] = command
             if command.command_id not in self.peer_approvals:
                 self.peer_approvals[command.command_id] = set()
             if command.command_id not in self.collected_shares:
                 self.collected_shares[command.command_id] = []
+
+            # Initialize command performance metrics
+            self.command_metrics[command.command_id] = {
+                "command_id": command.command_id,
+                "drone_id": self.drone_id,
+                "command_timestamp": command.timestamp,
+                "received_timestamp": time.time(),
+                "gs_verify_time_ms": round(elapsed * 1000, 3),
+                "approval_create_time_ms": 0.0,
+                "peer_verify_times_ms": [],
+                "reconstruct_time_ms": 0.0,
+                "decrypt_time_ms": 0.0,
+                "total_consensus_time_ms": 0.0,
+            }
+        else:
+            self.last_rejection_reason = "Invalid Falcon-512 GS signature"
 
         return is_valid, elapsed
 
@@ -97,27 +142,58 @@ class DroneNode:
         # Add own share to collected shares
         self.collected_shares.setdefault(command_id, []).append(self.share)
 
+        if command_id in self.command_metrics:
+            self.command_metrics[command_id]["approval_create_time_ms"] = round(elapsed * 1000, 3)
+
         return signed_app, elapsed
 
-    def process_peer_approval(self, approval: ApprovalMessage) -> Tuple[bool, float]:
+    def process_peer_approval(
+        self,
+        approval: ApprovalMessage,
+        current_time: Optional[float] = None,
+    ) -> Tuple[bool, float]:
         """
-        Decentralized verification of peer drone approvals.
-        Ensures sender is trusted and Falcon signature is valid.
+        Decentralized verification of peer drone approvals with anti-replay checks.
+        Ensures freshness, sender trust, and Falcon signature validity.
         """
+        start = time.perf_counter()
+
+        # 1. Anti-Replay and Freshness verification
+        app_identifier = f"APP:{approval.command_id}:{approval.drone_id}"
+        is_fresh, reason = self.anti_replay.validate_and_record(
+            app_identifier, approval.timestamp, current_time=current_time
+        )
+        if not is_fresh:
+            self.last_rejection_reason = reason
+            elapsed = time.perf_counter() - start
+            return False, elapsed
+
+        # 2. Check Trust Registry
         if not self.trust_registry.is_trusted(approval.drone_id):
-            return False, 0.0
+            self.last_rejection_reason = f"Untrusted drone: {approval.drone_id}"
+            elapsed = time.perf_counter() - start
+            return False, elapsed
 
         peer_pk = self.trust_registry.get_public_key(approval.drone_id)
         if not peer_pk:
-            return False, 0.0
+            self.last_rejection_reason = f"Missing public key for drone: {approval.drone_id}"
+            elapsed = time.perf_counter() - start
+            return False, elapsed
 
+        # 3. Falcon-512 Signature verification
         sig_bytes = bytes.fromhex(approval.signature_hex)
-        start = time.perf_counter()
         is_valid = self.signer.verify(peer_pk, approval.digest(), sig_bytes)
         elapsed = time.perf_counter() - start
 
         if is_valid:
+            self.last_rejection_reason = None
             self.peer_approvals.setdefault(approval.command_id, set()).add(approval.drone_id)
+            if approval.command_id in self.command_metrics:
+                self.command_metrics[approval.command_id]["peer_verify_times_ms"].append(
+                    round(elapsed * 1000, 3)
+                )
+        else:
+            self.last_rejection_reason = f"Invalid signature from peer {approval.drone_id}"
 
         return is_valid, elapsed
 
@@ -159,6 +235,7 @@ class DroneNode:
     def execute_command(self, command_id: str) -> Optional[Dict[str, Any]]:
         """
         Reconstruct mission key locally from collected shares and decrypt the command payload.
+        Instruments metrics for Lagrange reconstruction and AEAD decryption.
         """
         if not self.can_execute(command_id):
             return None
@@ -168,7 +245,10 @@ class DroneNode:
             return None
 
         shares = self.collected_shares[command_id][: self.threshold]
+
+        recon_start = time.perf_counter()
         reconstructed_key_int = reconstruct_secret(shares)
+        recon_elapsed = time.perf_counter() - recon_start
 
         try:
             mission_key = reconstructed_key_int.to_bytes(32, byteorder="big")
@@ -179,8 +259,28 @@ class DroneNode:
         ciphertext = bytes.fromhex(command.ciphertext_hex)
         aad = bytes.fromhex(command.aad_hex)
 
+        decrypt_start = time.perf_counter()
         try:
             payload = decrypt_payload(mission_key, nonce, ciphertext, aad=aad)
+            decrypt_elapsed = time.perf_counter() - decrypt_start
+
+            # Calculate end-to-end consensus time
+            exec_time = time.time()
+            total_consensus_time = (exec_time - command.timestamp) * 1000
+
+            if command_id in self.command_metrics:
+                m = self.command_metrics[command_id]
+                m["reconstruct_time_ms"] = round(recon_elapsed * 1000, 3)
+                m["decrypt_time_ms"] = round(decrypt_elapsed * 1000, 3)
+                m["total_consensus_time_ms"] = round(total_consensus_time, 2)
+                m["executed_timestamp"] = exec_time
+                m["approvals_count"] = len(self.peer_approvals.get(command_id, set()))
+                m["shares_count"] = len(self.collected_shares.get(command_id, []))
+
             return payload
         except Exception:
             return None
+
+    def get_metrics(self, command_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve recorded performance metrics for a given command."""
+        return self.command_metrics.get(command_id)

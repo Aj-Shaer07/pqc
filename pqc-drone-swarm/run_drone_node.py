@@ -97,7 +97,8 @@ def main():
 
         is_valid, elapsed = drone.verify_gs_command(cmd)
         if not is_valid:
-            logger.warning(f"[{drone_id}] ❌ Invalid GS signature on command {cmd.command_id}. Ignoring.")
+            reason = drone.last_rejection_reason or "Verification failed"
+            logger.warning(f"[{drone_id}] ❌ Command {cmd.command_id} rejected ({reason}). Ignoring.")
             return
 
         logger.info(f"[{drone_id}] ✅ Verified GS Falcon signature in {elapsed*1000:.2f}ms. Broadcasting approval...")
@@ -127,6 +128,9 @@ def main():
                 logger.info(f"[{drone_id}] 🎯 Threshold {threshold} met for approvals! Broadcasting Shamir share...")
                 share_msg = drone.provide_share(app.command_id)
                 transport.publish(TOPIC_SHARES, share_msg.to_dict())
+        else:
+            reason = drone.last_rejection_reason or "Invalid peer approval"
+            logger.warning(f"[{drone_id}] ⚠️ Peer approval from {app.drone_id} rejected: {reason}")
 
     # 4. Handle peer shares & local execution
     def on_peer_share_received(topic: str, data: Dict[str, Any]):
@@ -145,12 +149,14 @@ def main():
             payload = drone.execute_command(share_msg.command_id)
             if payload:
                 logger.info(f"[{drone_id}] 🏆 SUCCESS: Executed mission payload: {payload}")
-                # Publish telemetry acknowledgment
+                metrics = drone.get_metrics(share_msg.command_id) or {}
+                # Publish telemetry acknowledgment with performance metrics
                 transport.publish(TOPIC_TELEMETRY, {
                     "drone_id": drone_id,
                     "command_id": share_msg.command_id,
                     "status": "EXECUTED",
                     "timestamp": time.time(),
+                    "metrics": metrics,
                 })
 
     # Register callbacks

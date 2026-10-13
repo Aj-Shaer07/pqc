@@ -56,8 +56,14 @@ def main():
         drone_id = data.get("drone_id")
         cid = data.get("command_id")
         status = data.get("status")
+        metrics = data.get("metrics", {})
         acknowledged_drones.add(drone_id)
-        logger.info(f"[GS] 📡 Received telemetry ACK from {drone_id} for command {cid} (Status: {status})")
+
+        consensus_ms = metrics.get("total_consensus_time_ms")
+        gs_verify_ms = metrics.get("gs_verify_time_ms")
+        recon_ms = metrics.get("reconstruct_time_ms")
+        metric_str = f" | Latency: consensus={consensus_ms}ms, verify={gs_verify_ms}ms, sss={recon_ms}ms" if consensus_ms else ""
+        logger.info(f"[GS] 📡 Received telemetry ACK from {drone_id} for command {cid} (Status: {status}{metric_str})")
 
     def on_registry(topic: str, data: Dict[str, Any]):
         drone_id = data.get("drone_id")
