@@ -16,9 +16,14 @@ TOPIC_REGISTRY = "swarm/registry"
 TOPIC_TELEMETRY = "swarm/telemetry"
 
 
+# Maximum wire payload limit (128 KB) to prevent memory exhaustion DoS on throttled companion hardware
+MAX_WIRE_PAYLOAD_BYTES = 128 * 1024
+
+
 class SwarmMQTTTransport:
     """
-    Manages asynchronous MQTT pub/sub connectivity over the simulated wireless mesh channel.
+    Manages asynchronous MQTT pub/sub connectivity over the simulated wireless mesh channel
+    with payload bounds checking, exception isolation, and reconnection resilience.
     """
 
     def __init__(
@@ -71,14 +76,22 @@ class SwarmMQTTTransport:
 
     def disconnect(self) -> None:
         """Stop background network loop and disconnect cleanly."""
-        self.client.loop_stop()
-        self.client.disconnect()
+        try:
+            self.client.loop_stop()
+            self.client.disconnect()
+        except Exception:
+            pass
         self.is_connected = False
         logger.info(f"[{self.client_id}] Disconnected from MQTT broker.")
 
     def publish(self, topic: str, data: Dict[str, Any], qos: int = 1) -> None:
-        """Publish JSON serializable data to an MQTT topic."""
+        """Publish JSON serializable data to an MQTT topic with payload size validation."""
+        if not isinstance(data, dict):
+            raise TypeError("MQTT data must be a dictionary.")
         payload_str = json.dumps(data)
+        payload_bytes = payload_str.encode("utf-8")
+        if len(payload_bytes) > MAX_WIRE_PAYLOAD_BYTES:
+            raise ValueError(f"Payload size ({len(payload_bytes)} bytes) exceeds maximum wire limit ({MAX_WIRE_PAYLOAD_BYTES} bytes).")
         self.client.publish(topic, payload_str, qos=qos)
 
     def subscribe(self, topic: str, qos: int = 1) -> None:
@@ -102,12 +115,26 @@ class SwarmMQTTTransport:
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
+        raw_len = len(msg.payload) if msg.payload else 0
+
+        # Enforce maximum wire payload bounds
+        if raw_len > MAX_WIRE_PAYLOAD_BYTES:
+            logger.error(f"[{self.client_id}] Dropped oversized message ({raw_len} bytes > {MAX_WIRE_PAYLOAD_BYTES}) on topic '{topic}'")
+            return
+
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
         except Exception as e:
-            logger.error(f"[{self.client_id}] Malformed JSON on {topic}: {e}")
+            logger.error(f"[{self.client_id}] Malformed JSON/UTF-8 on {topic} ({raw_len} bytes): {e}")
+            return
+
+        if not isinstance(payload, dict):
+            logger.warning(f"[{self.client_id}] Non-dictionary JSON payload dropped on {topic}")
             return
 
         handler = self._callbacks.get(topic)
         if handler:
-            handler(topic, payload)
+            try:
+                handler(topic, payload)
+            except Exception as e:
+                logger.exception(f"[{self.client_id}] Exception in message handler for topic '{topic}': {e}")

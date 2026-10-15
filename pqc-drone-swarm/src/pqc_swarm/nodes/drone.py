@@ -2,10 +2,11 @@
 
 import json
 import secrets
+import threading
 import time
 from typing import Dict, List, Optional, Set, Tuple, Any
 from pqc_swarm.crypto.falcon import FalconSigner
-from pqc_swarm.crypto.sss import reconstruct_secret
+from pqc_swarm.crypto.sss import reconstruct_secret, validate_share, PRIME
 from pqc_swarm.crypto.aead import encrypt_payload, decrypt_payload
 from pqc_swarm.crypto.anti_replay import AntiReplayFilter
 from pqc_swarm.models.messages import CommandMessage, ApprovalMessage, ShareMessage
@@ -38,6 +39,7 @@ class DroneNode:
         self.signer = signer or FalconSigner(512)
         self.anti_replay = anti_replay or AntiReplayFilter(window_seconds=freshness_window_sec)
         self.mesh_key = mesh_key
+        self._state_lock = threading.RLock()
 
         start = time.perf_counter()
         self.private_key, self.public_key = self.signer.keygen()
@@ -51,6 +53,8 @@ class DroneNode:
         self.peer_approvals: Dict[str, Set[str]] = {}
         # command_id -> list of verified (x, y) shares
         self.collected_shares: Dict[str, List[Tuple[int, int]]] = {}
+        # command_id -> set of drone_ids that contributed verified shares (prevents single-drone share inflation)
+        self.share_contributors: Dict[str, Set[str]] = {}
         # Cached active commands: command_id -> CommandMessage
         self.known_commands: Dict[str, CommandMessage] = {}
 
@@ -143,12 +147,15 @@ class DroneNode:
         )
 
         # Self-approval recorded locally
-        self.peer_approvals.setdefault(command_id, set()).add(self.drone_id)
-        # Add own share to collected shares
-        self.collected_shares.setdefault(command_id, []).append(self.share)
+        with self._state_lock:
+            self.peer_approvals.setdefault(command_id, set()).add(self.drone_id)
+            self.share_contributors.setdefault(command_id, set()).add(self.drone_id)
+            stored = self.collected_shares.setdefault(command_id, [])
+            if not any(s[0] == self.share[0] for s in stored):
+                stored.append(self.share)
 
-        if command_id in self.command_metrics:
-            self.command_metrics[command_id]["approval_create_time_ms"] = round(elapsed * 1000, 3)
+            if command_id in self.command_metrics:
+                self.command_metrics[command_id]["approval_create_time_ms"] = round(elapsed * 1000, 3)
 
         return signed_app, elapsed
 
@@ -192,12 +199,13 @@ class DroneNode:
 
         if is_valid:
             self.anti_replay.record_seen(app_identifier, approval.timestamp, current_time=current_time)
-            self.last_rejection_reason = None
-            self.peer_approvals.setdefault(approval.command_id, set()).add(approval.drone_id)
-            if approval.command_id in self.command_metrics:
-                self.command_metrics[approval.command_id]["peer_verify_times_ms"].append(
-                    round(elapsed * 1000, 3)
-                )
+            with self._state_lock:
+                self.last_rejection_reason = None
+                self.peer_approvals.setdefault(approval.command_id, set()).add(approval.drone_id)
+                if approval.command_id in self.command_metrics:
+                    self.command_metrics[approval.command_id]["peer_verify_times_ms"].append(
+                        round(elapsed * 1000, 3)
+                    )
         else:
             self.last_rejection_reason = f"Invalid signature from peer {approval.drone_id}"
 
@@ -247,7 +255,7 @@ class DroneNode:
     ) -> bool:
         """
         Verify peer share signature, anti-replay freshness, decrypt AEAD ciphertext if encrypted,
-        and store verified share coordinates for local threshold reconstruction.
+        validate field coordinates, enforce single-drone quota, and store verified share.
         """
         # 1. Anti-Replay check if timestamp is present
         share_identifier = ""
@@ -296,43 +304,66 @@ class DroneNode:
             share_x = share_msg.x
             share_y = share_msg.y
 
-        # 5. Record verified identifier in anti-replay cache
-        if share_identifier and share_msg.timestamp > 0.0:
-            self.anti_replay.record_seen(share_identifier, share_msg.timestamp, current_time=current_time)
+        # Validate coordinate field bounds (prevents x=0 or out-of-field elements)
+        if not validate_share((share_x, share_y)):
+            self.last_rejection_reason = f"Invalid share coordinates ({share_x}, {share_y}) out of prime field bounds"
+            return False
 
-        self.last_rejection_reason = None
-        stored = self.collected_shares.setdefault(share_msg.command_id, [])
-        if not any(s[0] == share_x for s in stored):
+        with self._state_lock:
+            # Enforce single-share quota per contributing peer drone
+            contributors = self.share_contributors.setdefault(share_msg.command_id, set())
+            if share_msg.drone_id in contributors:
+                self.last_rejection_reason = f"Duplicate share submission from peer {share_msg.drone_id}"
+                return False
+
+            stored = self.collected_shares.setdefault(share_msg.command_id, [])
+            if any(s[0] == share_x for s in stored):
+                self.last_rejection_reason = f"Duplicate share coordinate x={share_x} for command {share_msg.command_id}"
+                return False
+
+            # 5. Record verified identifier in anti-replay cache
+            if share_identifier and share_msg.timestamp > 0.0:
+                self.anti_replay.record_seen(share_identifier, share_msg.timestamp, current_time=current_time)
+
+            contributors.add(share_msg.drone_id)
             stored.append((share_x, share_y))
-        return True
+            self.last_rejection_reason = None
+            return True
 
     def can_execute(self, command_id: str) -> bool:
         """Check if local threshold condition is satisfied."""
-        approvals = self.peer_approvals.get(command_id, set())
-        shares = self.collected_shares.get(command_id, [])
-        return len(approvals) >= self.threshold and len(shares) >= self.threshold
+        with self._state_lock:
+            approvals = self.peer_approvals.get(command_id, set())
+            shares = self.collected_shares.get(command_id, [])
+            return len(approvals) >= self.threshold and len(shares) >= self.threshold
 
     def execute_command(self, command_id: str) -> Optional[Dict[str, Any]]:
         """
         Reconstruct mission key locally from collected shares and decrypt the command payload.
         Instruments metrics for Lagrange reconstruction and AEAD decryption.
         """
-        if not self.can_execute(command_id):
-            return None
+        with self._state_lock:
+            if not self.can_execute(command_id):
+                return None
 
-        command = self.known_commands.get(command_id)
-        if not command:
-            return None
+            command = self.known_commands.get(command_id)
+            if not command:
+                return None
 
-        shares = self.collected_shares[command_id][: self.threshold]
+            shares = list(self.collected_shares[command_id][: self.threshold])
 
         recon_start = time.perf_counter()
-        reconstructed_key_int = reconstruct_secret(shares)
+        try:
+            reconstructed_key_int = reconstruct_secret(shares)
+        except Exception as e:
+            self.last_rejection_reason = f"Lagrange reconstruction failed: {e}"
+            return None
         recon_elapsed = time.perf_counter() - recon_start
 
         try:
             mission_key = reconstructed_key_int.to_bytes(32, byteorder="big")
         except OverflowError:
+            self.last_rejection_reason = "Reconstructed secret key exceeds 256 bits"
             return None
 
         nonce = bytes.fromhex(command.nonce_hex)

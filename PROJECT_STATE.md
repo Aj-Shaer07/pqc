@@ -1,6 +1,6 @@
 # PQC Drone Swarm - Project State & Roadmap Tracker
 
-Last Updated: 2026-10-03
+Last Updated: 2026-10-15
 Repository: `https://github.com/Aj-Shaer07/pqc.git`
 
 ---
@@ -47,15 +47,24 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
   - [x] 1× Ground Station container (`pqc_ground_station`).
   - [x] $N$× Autonomous Drone containers (`--scale drone=N`).
   - [x] Isolated virtual bridge mesh network (`swarm-net`).
+  - [x] Live code volume mounting (`./pqc-drone-swarm:/app/pqc-drone-swarm`) for rapid zero-downtime testing.
 - [x] **Hardware Resource Constraints**:
   - [x] Dynamic RAM limits per container (`256m`, `128m`, `512m`).
   - [x] Dynamic CPU core throttling (`0.5`, `0.25`, `1.0`).
 - [x] **Interactive CLI Controller (`docker_commands.sh`)**:
   - [x] Easy commands: `build`, `test`, `sim-single`, `sim-all`, `up [N] [MEM] [CPUS]`, `down`, `logs`.
+  - [x] Automatic container alias resolution for targeted attacks (`DRONE_2`, `drone-7`, `2`, `10` $\to$ Docker container hex IDs) with collision-proof regex matching.
 
 ---
 
-## 🛡️ Phase 3: Protocol Hardening & Swarm Resilience (IN PROGRESS 🟡)
+## 🛡️ Phase 3: Protocol Hardening & Swarm Resilience (COMPLETED & HARDENED ✅)
+- [x] **Exact Dynamic $(k, n)$ SSS Generation**:
+  - [x] Eliminated static `shares_pool = 100` pre-generation hack.
+  - [x] Ground Station dynamically discovers active fleet size ($n = |\text{Registered Drones}|$) and computes exact $(k, n)$ polynomial evaluation points.
+  - [x] Cluster-wide `peer_registry` broadcast eliminates untrusted peer rejections upon dynamic scaling.
+- [x] **Intrusion Detection System (IDS) Decoupling**:
+  - [x] Continuous cryptographic share validation: Removed premature early return on executed commands in `run_drone_node.py`. Every peer share (early, on-time, or late) undergoes Anti-Replay, Falcon-512 signature, and Poly1305 MAC tag verification.
+  - [x] Single-execution enforcement: Local payload execution triggers strictly once upon satisfying threshold $k$, while subsequent malicious or tampered packets are flagged via `SECURITY_ALERT` telemetry.
 - [x] **Replay Attack Defense**:
   - [x] Enforce timestamp freshness validity windows (e.g. within $\pm 5$ seconds).
   - [x] Local nonce caching table to reject replayed commands and approvals with automatic TTL pruning.
@@ -68,12 +77,28 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
   - [x] Ground Station telemetry harvester captures and logs live security alerts across the cluster.
 - [x] **Anti-DoS Nonce Exhaustion Protection**:
   - [x] Strict decoupling of freshness checking (`check_freshness()`) from state commitment (`record_seen()`), ensuring unauthenticated packets cannot burn legitimate nonces.
+- [x] **Comprehensive Cryptographic, Network & System Hardening**:
+  - [x] **Cryptographic Hardening**:
+    - [x] Enforced SSS coordinate bounds: $1 \le x < p$ and $0 \le y < p$.
+    - [x] Strict $x=0$ rejection preventing trivial secret leakage ($f(0) = S$).
+    - [x] Duplicate $x$-coordinate detection during Lagrange interpolation to prevent division-by-zero modular inversion crashes.
+    - [x] Enforced single-drone share quota (`share_contributors`) to prevent a single compromised peer from inflating shares to reach threshold $k$.
+    - [x] Strict AEAD parameter enforcement: 32-byte key, 12-byte nonce, and $\ge 16$-byte Poly1305 MAC tag validation.
+  - [x] **Network Hardening**:
+    - [x] Enforced 128 KB wire payload ceiling (`MAX_WIRE_PAYLOAD_BYTES`) on both publish and ingress handlers to protect throttled 256MB RAM companion containers from memory exhaustion DoS.
+    - [x] Exception isolation in MQTT message callback handlers, ensuring malformed packet injections cannot crash the client background network thread.
+    - [x] Cryptographic client ID randomization (`secrets.token_hex(4)`) preventing broker connection collisions and involuntary client dropouts.
+  - [x] **System Hardening**:
+    - [x] Full thread safety via reentrant locks (`threading.RLock`) across `DroneNode`, `TrustRegistry`, and `AntiReplayFilter`.
+    - [x] Bounded memory pruning (`max_entries = 4096`) under sliding window packet flood attacks.
+    - [x] Clean SIGINT/SIGTERM process teardown and socket disposal.
+  - [x] **Automated Hardening Verification**: Expanded automated test suite to 17/17 tests passing (100%) inside isolated Docker containers and local environments.
 - [x] **Empirical Red-Team Adversarial Test Battery (`simulate_adversary.py`)**:
   - [x] **Wire Sniffing & Shannon Entropy Analysis**: Proves zero plaintext coordinate leakage and $H(X) \approx 6.88$–$7.99$ bits/byte indistinguishability.
   - [x] **Rogue Node Isolation (Ingress & Egress)**: Evaluates both ingress decryption failure (`InvalidTag`) and egress live-swarm rejection of rogue share injections.
-  - [x] **MitM Ciphertext Tampering**: Proves dual-layer rejection (Falcon-512 signature failure & Poly1305 MAC tag failure).
+  - [x] **MitM Ciphertext Tampering**: Proves dual-layer rejection (Falcon-512 signature failure & Poly1305 MAC tag failure) with targeted node resolution (e.g. `DRONE_2` $\to$ 9/9 rejections across the swarm).
   - [x] **Temporal Replay Attack**: Demonstrates `AntiReplayFilter` state rejection of replayed authentic packets with valid signatures.
-  - [x] **Unauthorized Ground Station Forgery**: Validates swarm-wide rejection of commands signed by unpinned Falcon-512 keys.
+  - [x] **Unauthorized Ground Station Forgery**: Validates swarm-wide rejection (10/10 nodes) of commands signed by unpinned Falcon-512 keys.
   - [x] **Standalone Multi-Vector Battery**: In-memory test harness (`./docker_commands.sh attack demo`) passing 100%.
 - [ ] **Rogue Ground Station Defense (Autonomous Safety)**:
   - [ ] Autonomous safety policies & geofence checks (drones reject out-of-boundary commands even if signed by GS).

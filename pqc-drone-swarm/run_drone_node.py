@@ -3,6 +3,7 @@
 
 import logging
 import os
+import secrets
 import signal
 import sys
 import time
@@ -68,12 +69,12 @@ def main():
     )
 
     transport = SwarmMQTTTransport(
-        client_id=drone_id,
+        client_id=f"{drone_id}_{secrets.token_hex(4)}",
         broker_host=broker_host,
         broker_port=broker_port,
     )
 
-    # 1. Handle Registry: GS public key, peer public keys, and assigned shares
+    # 1. Handle Registry: GS public key, peer public keys, cluster peer registry, and assigned shares
     def on_registry_received(topic: str, data: Dict[str, Any]):
         # Ground Station announcing its public key
         if "gs_public_key_hex" in data:
@@ -81,13 +82,30 @@ def main():
             trust_registry.set_gs_public_key(gs_pk)
             logger.info(f"[{drone_id}] 🔑 Installed Ground Station Public Key.")
 
-        # Peer drone announcing its public key
+        # Synchronize full cluster peer registry broadcasted by Ground Station
+        if "peer_registry" in data:
+            synced_count = 0
+            for peer_id, peer_pk_hex in data["peer_registry"].items():
+                if peer_id != drone_id:
+                    try:
+                        peer_pk = bytes.fromhex(peer_pk_hex)
+                        trust_registry.register_drone(peer_id, peer_pk)
+                        synced_count += 1
+                    except Exception:
+                        pass
+            if synced_count > 0:
+                logger.info(f"[{drone_id}] 🤝 Synchronized {synced_count} peer drone(s) from cluster registry.")
+
+        # Peer drone announcing its public key directly
         peer_id = data.get("drone_id")
         peer_pk_hex = data.get("public_key_hex")
         if peer_id and peer_pk_hex and peer_id != drone_id:
-            peer_pk = bytes.fromhex(peer_pk_hex)
-            trust_registry.register_drone(peer_id, peer_pk)
-            logger.info(f"[{drone_id}] 🤝 Registered peer drone: {peer_id}")
+            try:
+                peer_pk = bytes.fromhex(peer_pk_hex)
+                trust_registry.register_drone(peer_id, peer_pk)
+                logger.info(f"[{drone_id}] 🤝 Registered peer drone: {peer_id}")
+            except Exception:
+                pass
 
         # Ground station assigning Shamir share for this drone
         assigned_shares = data.get("assigned_shares", {})
@@ -194,7 +212,7 @@ def main():
             })
             return
 
-        if share_msg.drone_id == drone_id or share_msg.command_id in executed_commands:
+        if share_msg.drone_id == drone_id:
             return
 
         stored = drone.receive_share(share_msg)
@@ -215,7 +233,7 @@ def main():
             })
 
         # Check if local execution threshold is satisfied
-        if drone.can_execute(share_msg.command_id):
+        if share_msg.command_id not in executed_commands and drone.can_execute(share_msg.command_id):
             executed_commands.add(share_msg.command_id)
             logger.info(f"[{drone_id}] ⚡ All threshold conditions satisfied! Reconstructing key and executing payload locally...")
             payload = drone.execute_command(share_msg.command_id)
@@ -239,12 +257,14 @@ def main():
 
     transport.connect()
 
-    # Announce public key to registry
-    time.sleep(1.5)
-    transport.publish(TOPIC_REGISTRY, {
-        "drone_id": drone_id,
-        "public_key_hex": drone.public_key.hex(),
-    })
+    # Announce public key to registry with periodic retries during startup
+    logger.info(f"[{drone_id}] 📢 Announcing public key to {TOPIC_REGISTRY}...")
+    for _ in range(3):
+        transport.publish(TOPIC_REGISTRY, {
+            "drone_id": drone_id,
+            "public_key_hex": drone.public_key.hex(),
+        })
+        time.sleep(1.0)
     logger.info(f"[{drone_id}] 📢 Broadcasted public key to {TOPIC_REGISTRY}")
 
     logger.info(f"[{drone_id}] Daemon active and listening for swarm events...")

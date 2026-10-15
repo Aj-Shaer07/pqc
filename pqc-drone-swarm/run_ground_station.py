@@ -3,6 +3,7 @@
 
 import logging
 import os
+import secrets
 import signal
 import sys
 import time
@@ -39,6 +40,7 @@ def main():
     broker_host = os.getenv("MQTT_BROKER", "localhost")
     broker_port = int(os.getenv("MQTT_PORT", "1883"))
     threshold = int(os.getenv("THRESHOLD", "3"))
+    expected_drones = int(os.getenv("NUM_DRONES", "0"))
     mesh_key_hex = os.getenv("SWARM_MESH_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     if mesh_key_hex:
         logger.info("🔐 Swarm Broadcast Mesh Key active (Wire Confidentiality enabled across swarm).")
@@ -47,13 +49,24 @@ def main():
     gs = GroundStationNode()
 
     transport = SwarmMQTTTransport(
-        client_id="GROUND_STATION",
+        client_id=f"GROUND_STATION_{secrets.token_hex(4)}",
         broker_host=broker_host,
         broker_port=broker_port,
     )
 
-    registered_drones = {}
+    registered_drones: Dict[str, str] = {}
+    assigned_shares: Dict[str, Any] = {}
     acknowledged_drones = set()
+
+    mission_key = generate_mission_key()
+    mission_key_int = int.from_bytes(mission_key, byteorder="big")
+
+    def broadcast_registry():
+        transport.publish(TOPIC_REGISTRY, {
+            "assigned_shares": assigned_shares,
+            "gs_public_key_hex": gs.public_key.hex(),
+            "peer_registry": dict(registered_drones),
+        })
 
     def on_telemetry(topic: str, data: Dict[str, Any]):
         drone_id = data.get("drone_id")
@@ -78,8 +91,10 @@ def main():
         drone_id = data.get("drone_id")
         pk_hex = data.get("public_key_hex")
         if drone_id and pk_hex:
+            is_new = drone_id not in registered_drones
             registered_drones[drone_id] = pk_hex
-            logger.info(f"[GS] 📋 Registered active drone in swarm: {drone_id} (Total: {len(registered_drones)})")
+            if is_new:
+                logger.info(f"[GS] 📋 Registered active drone in swarm: {drone_id} (Total: {len(registered_drones)})")
 
     transport.register_handler(TOPIC_TELEMETRY, on_telemetry)
     transport.register_handler(TOPIC_REGISTRY, on_registry)
@@ -94,27 +109,37 @@ def main():
         })
         time.sleep(1)
 
-    # Wait for drone containers to initialize and register
-    logger.info("[GS] ⏳ Waiting 6 seconds for drone containers to discover network and register...")
-    time.sleep(6)
-
-    # Prepare Mission Key and Shamir Shares
-    mission_key = generate_mission_key()
-    mission_key_int = int.from_bytes(mission_key, byteorder="big")
+    # Wait dynamically for drone containers to initialize and register
+    target_count = expected_drones if expected_drones > 0 else threshold
+    logger.info(f"[GS] ⏳ Waiting for drone containers to discover network and register (Target: {target_count} drones)...")
+    wait_start = time.time()
+    last_count = 0
+    stable_seconds = 0
+    while time.time() - wait_start < 25.0:
+        time.sleep(1.0)
+        curr = len(registered_drones)
+        if expected_drones > 0 and curr >= expected_drones:
+            break
+        if curr >= threshold and curr == last_count:
+            stable_seconds += 1
+            if stable_seconds >= 3:
+                break
+        else:
+            stable_seconds = 0
+            last_count = curr
+            if curr > 0:
+                logger.info(f"[GS] 📋 Swarm discovery progress: {curr}/{target_count} drone(s) registered.")
 
     num_drones = max(len(registered_drones), threshold)
+    logger.info(f"[GS] 🗝️ Active swarm established with {num_drones} drones. Generating exact (k={threshold}, n={num_drones}) Shamir shares...")
     shares = generate_shares(mission_key_int, threshold=threshold, num_shares=num_drones)
 
-    # Assign each registered drone a unique share
-    assigned_shares = {}
+    # Assign each registered drone its exact unique coordinate (1..n)
     for idx, d_id in enumerate(registered_drones.keys()):
         assigned_shares[d_id] = (shares[idx][0], shares[idx][1])
+        logger.info(f"[GS] 📦 Assigned share (x={shares[idx][0]}) to {d_id}")
 
-    logger.info(f"[GS] 🗝️ Generated Shamir Shares (k={threshold}, n={num_drones}). Distributing to registered drones...")
-    transport.publish(TOPIC_REGISTRY, {
-        "assigned_shares": assigned_shares,
-        "gs_public_key_hex": gs.public_key.hex(),
-    })
+    broadcast_registry()
 
     command_seq = 0
 
@@ -131,7 +156,8 @@ def main():
             ],
             "timestamp": now,
         }
-
+ 
+        broadcast_registry()
         logger.info(f"[GS] 🔒 Encrypting (ChaCha20-Poly1305) & signing (Falcon-512) mission command #{command_seq} ({action})...")
         cmd, sign_time = gs.create_command(payload, mission_key)
         logger.info(f"[GS] Command created: {cmd.command_id} (Sign time: {sign_time*1000:.2f}ms)")

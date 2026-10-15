@@ -51,7 +51,7 @@ All operations are automated through the unified controller script:
 | Command | Syntax | Description |
 | :--- | :--- | :--- |
 | **`build`** | `./docker_commands.sh build` | Compiles dependencies and builds the base `pqc-drone-swarm:latest` Docker image. |
-| **`test`** | `./docker_commands.sh test` | Runs the automated 12-test cryptographic & protocol test battery inside an isolated container. |
+| **`test`** | `./docker_commands.sh test` | Runs the automated 17-test cryptographic, network, and system hardening test battery inside an isolated container. |
 | **`up`** | `./docker_commands.sh up [N] [MEM] [CPUS]` | Spawns the live swarm cluster with 1 Mosquitto Broker, 1 Ground Station, and $N$ Drones with custom CPU/RAM limits. |
 | **`logs`** | `./docker_commands.sh logs` | Streams real-time decentralized consensus logs across all containers. |
 | **`attack`** | `./docker_commands.sh attack [MODE] [DUR] [TARGET]` | Injects Red-Team attack scenarios: `demo`, `eavesdrop`, `wrong-key`, `tamper`, `replay`, or `rogue-gs`. |
@@ -88,7 +88,7 @@ All operations are automated through the unified controller script:
 
 #### What It Does:
 - Spawns a disposable container (`docker run --rm`) that executes Python's unit test runner against [tests/test_swarm.py](file:///home/aj-shaer/Desktop/pqc/pqc-drone-swarm/tests/test_swarm.py).
-- **Validates 12 Security Subsystems:**
+- **Validates 17 Security & Hardening Subsystems:**
   1. Falcon-512 digital signature generation and verification.
   2. CSPRNG Shamir's Secret Sharing polynomial evaluation over $p = 2^{521} - 1$.
   3. Lagrange polynomial interpolation at $x=0$ for key reconstruction.
@@ -101,6 +101,11 @@ All operations are automated through the unified controller script:
   10. Wire confidentiality: zero plaintext $(x, y)$ leakage in `ShareMessage.to_dict()`.
   11. Broadcast encryption: passive eavesdroppers unable to reconstruct secret.
   12. Active tampering: bit-flipped ciphertexts and incorrect keys rejected.
+  13. Shamir coordinate bounds validation ($1 \le x < p$, $0 \le y < p$), $x=0$ secret-leakage rejection, and duplicate $x$-coordinate detection preventing Lagrange division-by-zero.
+  14. Defensive AEAD parameter bounds: strict 32-byte key, 12-byte nonce, and $\ge 16$-byte MAC tag enforcement.
+  15. Anti-replay bounded memory eviction: hard entry cap protection against flood DoS within the freshness window.
+  16. DroneNode single-drone share inflation quota enforcement: prevents a compromised node from single-handedly satisfying threshold $k$.
+  17. MQTT transport wire payload limit enforcement (128 KB ceiling) protecting companion microcomputers from RAM exhaustion.
 
 ---
 
@@ -204,15 +209,17 @@ The empirical testing harness executes six active and passive attack scenarios a
 # Tamper with shares from any broadcasting drone
 ./docker_commands.sh attack tamper 30 all
 
-# Tamper specifically with shares from Drone 2
+# Tamper specifically with shares from Drone 2 (supports aliases: DRONE_2, drone-2, 2)
 ./docker_commands.sh attack tamper 30 DRONE_2
 ```
+- **Automatic Container Alias Resolution:** The CLI automatically resolves human-readable container aliases (`DRONE_2`, `drone-7`, `2`, `10`) to the underlying container ID hash (`DRONE_91ef21ba`, `DRONE_7cd8540b`) using exact regex matching, avoiding collisions between nodes like `drone-1` and `drone-10`.
 - **Execution:** Intercepts legitimate in-flight share broadcasts on `swarm/shares`, flips bits in `ciphertext_hex`, and re-injects the corrupted packet into the mesh.
 - **Empirical Output:**
   - Receiving drone containers invoke `receive_share()` and drop the packet at two cryptographic layers:
-    1. **Falcon-512 Digital Signature:** Digest mismatch over altered ciphertext bytes.
+    1. **Falcon-512 Digital Signature:** Digest mismatch over altered ciphertext bytes (Falcon C library returns signature squared norm error).
     2. **Poly1305 AEAD MAC Tag:** Decryption raises `InvalidTag`.
-  - Recipient containers emit `SECURITY_ALERT` events (`alert_type: SHARE_REJECTED`) on `swarm/telemetry`, captured and confirmed by the attack harness.
+  - Recipient containers emit `SECURITY_ALERT` events (`alert_type: SHARE_REJECTED`) on `swarm/telemetry`, captured and confirmed by the attack harness (e.g. 9/9 live Docker rejections across the rest of a 10-node swarm).
+  - Even after local command execution threshold $k$ is satisfied, continuous IDS validation inspects all subsequent peer shares and alerts on corrupted traffic without double-executing payloads.
 
 ---
 

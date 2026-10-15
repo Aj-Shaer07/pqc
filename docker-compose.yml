@@ -18,6 +18,7 @@ services:
 
   # Ground Station Node (Issues, signs, and dispatches PQC mission commands)
   ground-station:
+    image: pqc-drone-swarm:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -28,7 +29,10 @@ services:
       - MQTT_BROKER=mqtt-broker
       - MQTT_PORT=1883
       - NODE_ROLE=ground_station
+      - NUM_DRONES=${NUM_DRONES:-5}
       - SWARM_MESH_KEY=${SWARM_MESH_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+    volumes:
+      - ./pqc-drone-swarm:/app/pqc-drone-swarm
     networks:
       - swarm-net
     command: ["python3", "run_ground_station.py"]
@@ -40,6 +44,7 @@ services:
 
   # Drone Node Template (Dynamic scaling: docker compose up --scale drone=N)
   drone:
+    image: pqc-drone-swarm:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -51,6 +56,8 @@ services:
       - NODE_ROLE=drone
       - THRESHOLD=3
       - SWARM_MESH_KEY=${SWARM_MESH_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+    volumes:
+      - ./pqc-drone-swarm:/app/pqc-drone-swarm
     networks:
       - swarm-net
     command: ["python3", "run_drone_node.py"]

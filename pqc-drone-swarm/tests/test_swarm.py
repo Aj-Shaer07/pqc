@@ -9,8 +9,9 @@ if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
 from pqc_swarm.crypto.falcon import FalconSigner
-from pqc_swarm.crypto.sss import generate_shares, reconstruct_secret, PRIME
+from pqc_swarm.crypto.sss import generate_shares, reconstruct_secret, validate_share, PRIME
 from pqc_swarm.crypto.aead import generate_mission_key, encrypt_payload, decrypt_payload
+from pqc_swarm.networking.mqtt_client import SwarmMQTTTransport, MAX_WIRE_PAYLOAD_BYTES
 from pqc_swarm.models.messages import CommandMessage, ApprovalMessage, ShareMessage
 from pqc_swarm.models.registry import TrustRegistry
 from pqc_swarm.sim.in_memory_sim import run_decentralized_simulation
@@ -271,6 +272,9 @@ class TestPQCDroneSwarm(unittest.TestCase):
         d1.process_peer_approval(app2)
         d2.process_peer_approval(app1)
 
+        # Instantiate eavesdropper before share generation with wide freshness window to prevent keygen CPU skew
+        eavesdropper = DroneNode("ROGUE", share=(99, 12345), threshold=2, trust_registry=registry, mesh_key=None, freshness_window_sec=60.0)
+
         # D2 publishes encrypted share
         encrypted_share = d2.provide_share(cmd.command_id)
         wire_data = encrypted_share.to_dict()
@@ -280,7 +284,6 @@ class TestPQCDroneSwarm(unittest.TestCase):
         self.assertNotIn("y", wire_data)
 
         # Eavesdropper node without mesh_key attempts to receive share
-        eavesdropper = DroneNode("ROGUE", share=(99, 12345), threshold=2, trust_registry=registry, mesh_key=None)
         accepted = eavesdropper.receive_share(ShareMessage.from_dict(wire_data))
         self.assertFalse(accepted, "Node without mesh_key must not be able to accept/decrypt encrypted share")
         self.assertIn("no mesh_key configured", eavesdropper.last_rejection_reason)
@@ -323,8 +326,113 @@ class TestPQCDroneSwarm(unittest.TestCase):
         accepted_tampered = d1.receive_share(tampered_msg)
         self.assertFalse(accepted_tampered)
 
+    def test_sss_coordinate_validation_and_duplicate_rejection(self):
+        """Verify strict Shamir prime field bounds, x=0 secret-leakage rejection, and duplicate x detection."""
+        # x=0 reveals the secret directly (f(0) = S) and must be rejected
+        self.assertFalse(validate_share((0, 12345)))
+        # Negative x coordinate rejected
+        self.assertFalse(validate_share((-1, 12345)))
+        # Out-of-field x or y coordinates rejected
+        self.assertFalse(validate_share((PRIME, 12345)))
+        self.assertFalse(validate_share((1, PRIME)))
+        self.assertFalse(validate_share((1, -5)))
+        # Valid share accepted
+        self.assertTrue(validate_share((1, 12345)))
+
+        # Duplicate x-coordinates crash Lagrange modular inversion; must raise ValueError
+        duplicate_shares = [(1, 100), (1, 200), (2, 300)]
+        with self.assertRaises(ValueError) as ctx:
+            reconstruct_secret(duplicate_shares)
+        self.assertIn("Duplicate x-coordinate", str(ctx.exception))
+
+    def test_aead_defensive_bounds_and_tampering(self):
+        """Verify strict AEAD key, nonce, MAC tag size enforcement and tampering defense."""
+        valid_key = generate_mission_key()
+
+        # Key must be strictly 32 bytes
+        with self.assertRaises(ValueError):
+            encrypt_payload(b"short_key_16byte", {"test": 1})
+
+        nonce, ciphertext = encrypt_payload(valid_key, {"sensor": "GPS"})
+
+        # Nonce must be strictly 12 bytes
+        with self.assertRaises(ValueError):
+            decrypt_payload(valid_key, b"short_nonce", ciphertext)
+
+        # Ciphertext must contain at least 16 bytes for Poly1305 MAC tag
+        with self.assertRaises(ValueError):
+            decrypt_payload(valid_key, nonce, b"short_ct")
+
+        # Corrupted MAC tag raises InvalidTag / exception (authentication failure)
+        tampered_ct = bytearray(ciphertext)
+        tampered_ct[-1] ^= 0xFF
+        with self.assertRaises(Exception):
+            decrypt_payload(valid_key, nonce, bytes(tampered_ct))
+
+    def test_anti_replay_bounded_memory_eviction(self):
+        """Verify that AntiReplayFilter enforces maximum entry cap and evicts oldest entries under flood."""
+        filt = AntiReplayFilter(window_seconds=10.0, max_entries=10)
+        now = 1000.0
+
+        # Insert 15 entries within the valid freshness window
+        for i in range(15):
+            ok, reason = filt.validate_and_record(f"flood-msg-{i}", now + (i * 0.1), current_time=now)
+            self.assertTrue(ok)
+
+        # Memory cap must guarantee tracked entries remain <= max_entries
+        self.assertLessEqual(filt.tracked_count, 10)
+
+    def test_drone_node_single_share_quota_enforcement(self):
+        """Verify that a single peer drone cannot submit multiple shares for the same command."""
+        registry = TrustRegistry()
+        mesh_key = generate_mission_key()
+        d1 = DroneNode("DRONE_1", share=(1, 100), threshold=3, trust_registry=registry, mesh_key=mesh_key)
+        d2 = DroneNode("DRONE_2", share=(2, 200), threshold=3, trust_registry=registry, mesh_key=mesh_key)
+        registry.register_drone(d1.drone_id, d1.public_key)
+        registry.register_drone(d2.drone_id, d2.public_key)
+
+        share_msg1 = d2.provide_share("cmd-quota-test")
+        accepted1 = d1.receive_share(share_msg1)
+        self.assertTrue(accepted1)
+
+        # Defense Layer 1: Replayed identical share is rejected by anti-replay filter
+        self.assertFalse(d1.receive_share(share_msg1))
+        self.assertIn("Replay detected", d1.last_rejection_reason)
+
+        # Defense Layer 2: A different share coordinate from the same peer (with timestamp 0.0)
+        # bypasses anti-replay and is strictly rejected by the single-drone quota
+        share_payload2 = {"x": 3, "y": 300}
+        aad2 = f"SHARE:cmd-quota-test:{d2.drone_id}:0.0".encode("utf-8")
+        nonce, ciphertext = encrypt_payload(mesh_key, share_payload2, aad=aad2)
+        share_msg2 = ShareMessage(
+            command_id="cmd-quota-test",
+            drone_id=d2.drone_id,
+            x=0,
+            y=0,
+            timestamp=0.0,
+            nonce_hex=nonce.hex(),
+            ciphertext_hex=ciphertext.hex(),
+            is_encrypted=True,
+        )
+        sig = d2.signer.sign(d2.private_key, share_msg2.digest())
+        share_msg2 = share_msg2.with_signature(sig)
+
+        accepted2 = d1.receive_share(share_msg2)
+        self.assertFalse(accepted2)
+        self.assertIn("Duplicate share submission from peer", d1.last_rejection_reason)
+
+    def test_mqtt_transport_payload_size_enforcement(self):
+        """Verify that SwarmMQTTTransport rejects publishing payloads exceeding MAX_WIRE_PAYLOAD_BYTES (128KB)."""
+        transport = SwarmMQTTTransport("TEST_DRONE", "127.0.0.1", 1883)
+        oversized_data = {"junk": "A" * (MAX_WIRE_PAYLOAD_BYTES + 1024)}
+
+        with self.assertRaises(ValueError) as ctx:
+            transport.publish("pqc/swarm/test", oversized_data)
+        self.assertIn("exceeds maximum wire limit", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

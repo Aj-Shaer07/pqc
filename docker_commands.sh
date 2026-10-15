@@ -62,6 +62,22 @@ case "$CMD" in
         MODE=${2:-demo}
         DUR=${3:-25}
         TARGET=${4:-all}
+
+        # Resolve drone container aliases (e.g. DRONE_2, drone-2, 2) to container's swarm ID (DRONE_<hex>)
+        if [ "$TARGET" != "all" ] && [ "$TARGET" != "any" ]; then
+            NUM=$(echo "$TARGET" | grep -o -E '[0-9]+' | tail -n 1)
+            if [ -n "$NUM" ] && [ "${#TARGET}" -lt 12 ]; then
+                MATCHED_CID=$(docker ps --format '{{.Names}} {{.ID}}' 2>/dev/null | awk -v n="drone-$NUM" '($1 ~ ("-" n "$") || $1 ~ ("_" n "$") || $1 == n) {print $2; exit}')
+                if [ -n "$MATCHED_CID" ]; then
+                    RESOLVED="DRONE_${MATCHED_CID:0:8}"
+                    echo "[*] Resolved target alias '$TARGET' -> Container pqc-drone-$NUM ($RESOLVED)"
+                    TARGET="$RESOLVED"
+                fi
+            elif [[ "$TARGET" =~ ^[0-9a-fA-F]{8}$ ]]; then
+                TARGET="DRONE_$TARGET"
+            fi
+        fi
+
         echo "[*] Running Red-Team adversary simulation (Mode: $MODE, Target: $TARGET)..."
         if [ "$MODE" = "demo" ]; then
             docker run --rm -v "$PWD/pqc-drone-swarm:/app/pqc-drone-swarm" pqc-drone-swarm:latest python3 simulate_adversary.py --mode demo
@@ -110,6 +126,7 @@ case "$CMD" in
 
         export DRONE_MEM_LIMIT="$MEM"
         export DRONE_CPU_LIMIT="$CPUS"
+        export NUM_DRONES="$DRONES"
 
         docker compose up -d --build --scale drone="$DRONES"
         echo "[+] Swarm running! View logs with: ./docker_commands.sh logs"

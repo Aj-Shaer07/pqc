@@ -2,7 +2,7 @@
 
 import os
 import sys
-from typing import Tuple
+from typing import Tuple, Any
 
 try:
     # 1. Direct standard import (works if falcon-py is installed or in PYTHONPATH)
@@ -47,12 +47,25 @@ class FalconSigner:
         """Generate a (private_key, public_key) pair."""
         return self._engine.keygen()
 
-    def sign(self, private_key: bytes, message: bytes) -> bytes:
+    # Canonical alias for cryptographic consistency across test harnesses
+    generate_keypair = keygen
+
+    def sign(self, private_key: Any, message: bytes) -> bytes:
         """Sign a message or digest with the private key."""
+        if not (isinstance(private_key, (bytes, tuple)) and len(private_key) > 0):
+            raise ValueError("private_key must be non-empty bytes or tuple.")
+        if not isinstance(message, bytes) or len(message) == 0:
+            raise ValueError("message must be non-empty bytes.")
         return self._engine.sign(private_key, message)
 
     def verify(self, public_key: bytes, message: bytes, signature: bytes) -> bool:
-        """Verify the signature against the message and public key."""
+        """Verify the signature against the message and public key with defensive type checking."""
+        if not isinstance(public_key, bytes) or len(public_key) == 0:
+            return False
+        if not isinstance(message, bytes) or len(message) == 0:
+            return False
+        if not isinstance(signature, bytes) or len(signature) == 0:
+            return False
         try:
             return bool(self._engine.verify(public_key, message, signature))
         except Exception:

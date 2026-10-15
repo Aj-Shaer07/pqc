@@ -204,6 +204,37 @@ To transition from theoretical security proofs to empirical validation across in
 6. **Anti-DoS Nonce Poisoning Protection:**
    - Freshness verification (`check_freshness()`) is strictly decoupled from state caching (`record_seen()`). Nonces are committed to cache only after signature authentication passes, preventing unauthenticated forgery packets from exhausting honest nonces.
 
+### 5.5 Multi-Dimensional Cryptographic, Network & System Hardening
+
+To guard against adversarial denial-of-service, mathematical corner cases, and network instability, the implementation incorporates three layers of hardening:
+
+#### 1. Cryptographic Hardening
+- **Shamir Prime Field Bounds & Non-Zero Invariance:** SSS shares $(x, y)$ are verified against $1 \le x < p$ and $0 \le y < p$. Specifically, evaluating $x=0$ yields $f(0) = S$, directly exposing the secret. Drones validate incoming shares using `validate_share()`, discarding any zero or out-of-field elements immediately.
+- **Lagrange Coordinate Collision Defense:** Lagrange interpolation requires computing modular inverses $(x_j - x_m)^{-1} \pmod p$. If an adversary submits duplicate $x$ coordinates, the denominator vanishes ($x_j - x_m = 0$), causing fatal division-by-zero exceptions (`pow(0, -1, p)`). `reconstruct_secret()` validates pairwise uniqueness of $x$ coordinates prior to interpolation.
+- **Single-Drone Share Inflation Quota:** In decentralized $(k, n)$ consensus, threshold $k$ must represent $k$ distinct peer drones. A compromised drone holding 1 valid Falcon keypair must not be permitted to broadcast multiple coordinate shares to meet threshold $k$ alone. Drones track `share_contributors: Dict[str, Set[str]]` and enforce a strict one-share quota per contributing peer drone.
+- **Defensive AEAD Parameter Checking:** Enforces strict 32-byte keys, 12-byte nonces, and minimum 16-byte MAC tags in ChaCha20-Poly1305 routines. Malformed UTF-8 or corrupt JSON payloads trigger explicit cryptographic rejections rather than unhandled native crashes.
+
+#### 2. Network Hardening
+- **Wire Payload Size Bounding (128 KB Limit):** Constrained companion computers (e.g., 256MB RAM) are vulnerable to memory-bomb DoS attacks via oversized MQTT frames. `MAX_WIRE_PAYLOAD_BYTES = 128 * 1024` enforces a hard payload limit on both outbound publications and inbound message handlers, dropping oversized payloads prior to deserialization.
+- **Thread Exception Isolation:** `paho-mqtt` dispatches message handlers on an internal background thread (`loop_start()`). Uncaught exceptions inside message callbacks can terminate the network thread without crashing the parent process, leaving the drone deaf to gossip. All message callbacks wrap handler invocations with defensive exception isolation, logging alerts without disrupting the network loop.
+- **Broker Client ID Entropy:** Client IDs are suffixed with cryptographic entropy (`secrets.token_hex(4)`), preventing connection drops from client ID collisions on the Mosquitto broker.
+
+#### 3. System & Concurrency Hardening
+- **Reentrant State Mutexes (`threading.RLock`):** Drones process asynchronous network callbacks across multiple threads while simultaneously evaluating consensus timeouts. Mutex locks across `DroneNode`, `TrustRegistry`, and `AntiReplayFilter` protect internal dictionaries against race conditions and self-deadlocks.
+- **Bounded Sliding-Window Cache:** `AntiReplayFilter` enforces `max_entries = 4096`. Under high-frequency flood DoS within the sliding time window, excess entries are evicted to maintain strict $O(1)$ memory consumption.
+
+### 5.6 Dynamic $(k, n)$ Fleet Discovery & Continuous Intrusion Detection
+
+- **Dynamic Cluster Discovery & Exact $(k, n)$ Allocation:**
+  In practical field deployments, the active swarm fleet size $n$ fluctuates based on operational scale and container replica counts. The Ground Station implements dynamic fleet discovery over `swarm/registry`, aggregating registrations to determine the active cluster count $n = |\text{Registered Fleet}|$. Exact $(k, n)$ Shamir shares are then evaluated over $\mathbb{F}_p$ for $x \in \{1, \dots, n\}$ and assigned uniquely to each discovered drone, eliminating artificial static share pools. A synchronized cluster registry broadcast distributes all peer public keys and assigned coordinates to the fleet before mission dispatch, preventing untrusted-drone rejection cascades.
+- **Continuous Intrusion Detection System (IDS) Share Validation:**
+  In a $(k, n)$ threshold swarm where $k < n$ (e.g. $k=3, n=10$), honest nodes reach consensus rapidly upon receiving the first $k$ shares. However, an in-flight adversary may tamper with shares transmitted by remaining peers. The node architecture decouples mission execution from cryptographic packet inspection:
+  - Every incoming share is continuously evaluated through the complete validation pipeline: Anti-Replay freshness $\to$ Falcon-512 digital signature $\to$ ChaCha20-Poly1305 MAC tag.
+  - Corrupted or bit-flipped ciphertexts immediately generate distributed `SECURITY_ALERT` telemetry, ensuring 100% visibility over active RF mesh attacks even after local mission consensus has settled.
+  - Local payload execution is guarded by an execution set, guaranteeing that the mission payload executes strictly once upon reaching threshold $k$.
+- **Automated Container Alias Resolution in Adversary Evaluation:**
+  To enable seamless testing across containerized topologies, the evaluation controller (`docker_commands.sh`) implements host-level container inspection with exact regex anchoring. Targeting commands like `./docker_commands.sh attack tamper 30 DRONE_2` automatically resolve to the target container's cryptographic identifier (`pqc-drone-2` $\to$ `DRONE_91ef21ba`), verifying targeted MitM interception and dual-layer cryptographic rejection across all 9 peer nodes in the running Docker cluster.
+
 ---
 
 ## 6. Structural Implementation Mapping
