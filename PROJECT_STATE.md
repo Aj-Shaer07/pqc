@@ -19,7 +19,7 @@ To ensure strict mathematical and architectural uniformity across all documentat
 | **$K_{\text{mission}}$ ($S$)** | Master Mission Key ($S = f(0) \pmod p$) | 256-bit key embedded in $\mathbb{F}_p$ ($p = 2^{521} - 1$) | Mission payload cipher key |
 | **$W$** | Temporal anti-replay sliding window | <span style="white-space:nowrap">$W = \pm 5.0\text{ s}$</span> ($2W = 10.0\text{ s}$ TTL cache) | Freshness window |
 | **$p_{\text{loss}}$** | Simulated RF mesh packet loss probability | <span style="white-space:nowrap">$p_{\text{loss}} \in \{0.05, 0.10, 0.20\}$</span> (5%, 10%, 20%) | Loss probability |
-| <span style="white-space:nowrap">**$m$-of-$n_{\text{gs}}$**</span> | Multi-operator Ground Station threshold signature | <span style="white-space:nowrap">$m \le n_{\text{gs}}$</span> (e.g., 2-of-3 GS operators) | Replaces generic M-of-N notation |
+| **$m$** (GS) | Multi-operator Ground Station signature threshold | $m \le n_{\text{gs}}$ (e.g., 2-of-3 GS operators) | Replaces legacy M-of-N notation |
 | **RAM Quotas** | Container memory cgroup limit | `256m` (256 MB default); `128m`, `512m` evaluated | Standardized MB / cgroup syntax |
 | **CPU Quotas** | Container CPU core throttling quota | `0.5` cores (default); `0.25`, `1.0` evaluated | Standardized core allocation |
 | **Payload Ceiling** | MQTT wire frame byte ceiling (`MAX_WIRE_PAYLOAD_BYTES`) | $128\text{ KB}$ ($131{,}072\text{ bytes}$) | Wire ingress/publish DoS barrier |
