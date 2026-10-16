@@ -100,10 +100,25 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
   - [x] **Temporal Replay Attack**: Demonstrates `AntiReplayFilter` state rejection of replayed authentic packets with valid signatures.
   - [x] **Unauthorized Ground Station Forgery**: Validates swarm-wide rejection (10/10 nodes) of commands signed by unpinned Falcon-512 keys.
   - [x] **Standalone Multi-Vector Battery**: In-memory test harness (`./docker_commands.sh attack demo`) passing 100%.
+- [ ] **Decoupled Dual-Threshold Architecture ($k_a, k_s$)**:
+  - [ ] Parameterize independent command authorization threshold ($k_a$ peer approvals) and key reconstruction threshold ($k_s$ Shamir shares), where $k_s \le k_a$.
+  - [ ] Evaluate trade-offs between authorization rigor and mission availability under node dropouts and packet loss.
+- [ ] **Statistical Rigor & Scaled Empirical Benchmarks**:
+  - [ ] Scale automated benchmark harness from $N=10$ to $N \ge 100$ iterations across all $(k, n)$ configurations: $(3,5), (5,10), (10,20), (25,50)$.
+  - [ ] Compute and report full statistical distributions: Mean ($\mu$), Standard Deviation ($\pm \sigma$), 95% Confidence Intervals, and Median/IQR.
+- [ ] **Network & Bandwidth Wire Overhead Profiling**:
+  - [ ] Profile exact wire payload sizes: Commands ($\approx 1.2\text{ KB}$), Approvals ($\approx 780\text{ B}$), Encrypted Shares ($\approx 850\text{ B}$), and Telemetry ($\approx 350\text{ B}$).
+  - [ ] Quantify aggregate network bandwidth and traffic volume (bytes/sec) over MQTT topics as swarm scales from $n=5$ to $n=50$.
+- [ ] **Hardware Resource Profiling (Cgroups / Embedded Flight Computer Simulation)**:
+  - [ ] Instrument per-container memory RSS (MB) tracking via `/sys/fs/cgroup/memory.current` / `psutil`.
+  - [ ] Profile CPU utilization spikes (%) during peak concurrent Falcon-512 verification under constrained 0.5-core limits.
+- [ ] **Varying Network Conditions Simulation (Packet Loss & Jitter)**:
+  - [ ] Implement simulated RF mesh loss rates ($p_{\text{loss}} \in \{5\%, 10\%, 20\%\}$) and radio propagation jitter.
+  - [ ] Quantify threshold consensus success rates and delay impact when $n > k_s$.
 - [ ] **Rogue Ground Station Defense (Autonomous Safety)**:
   - [ ] Autonomous safety policies & geofence checks (drones reject out-of-boundary commands even if signed by GS).
   - [ ] Multi-operator signature verification (require $M$-of-$N$ GS signatures).
-- [ ] **Dynamic Swarm Membership**:
+- [ ] **Dynamic Swarm Membership & Drop-out Handling**:
   - [ ] Trust registry revocation lists broadcast over `swarm/registry`.
   - [ ] Dynamic onboarding of replacement drones with fresh shares without altering the master mission key.
 - [ ] **Node Drop-out & Fail-safe Handling**:
@@ -124,15 +139,15 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
 - [ ] **Automated Symbolic Verification (ProVerif / Tamarin Provers)**:
   - [ ] Model the protocol under the **Dolev-Yao** network attacker model.
   - [ ] Model ephemeral compromise under the **Canetti-Krawczyk (CK)** adversary model.
-  - [ ] Formally prove **Secrecy / Confidentiality** ($\text{Attacker} \not\vdash K_{\text{mission}}$ when $< k$ shares compromised).
+  - [ ] Formally prove **Secrecy / Confidentiality** ($\text{Attacker} \not\vdash K_{\text{mission}}$ when $< k_s$ shares compromised).
   - [ ] Formally prove **Injective Agreement** (Mutual authentication between GS and Swarm).
   - [ ] Formally prove **Non-Frameability / Unforgeability** (Adversary cannot forge honest drone approvals).
   - [ ] Formally prove **Anti-Replay Invariance** across temporal sessions.
   - [ ] Formally prove **Forward Secrecy (PFS)** of completed mission commands.
 - [ ] **Post-Quantum Cryptographic & Hardness Analysis**:
   - [ ] Quantum bit-security quantification for Falcon-512 (Core-SVP hardness via BKZ-2.0 lattice reduction simulation).
-  - [ ] Classical vs Post-Quantum comparison (Falcon-512 vs ECDSA/RSA-2048 key size, signature size, and verification overhead).
-- [ ] **Advanced Swarm Fault Tolerance**:
-  - [ ] **Byzantine Share Corruption**: Malicious nodes broadcasting corrupted Shamir shares $(x, y')$ to attempt denial-of-reconstruction.
-  - [ ] **Swarm Drop-out & Split-Brain**: Rapid dropping of $N - k + 1$ containers to verify autonomous abort and RTL fail-safe.
+- [ ] **Collusion & Byzantine Fault Tolerance Analysis**:
+  - [ ] Formal collusion resilience proof for $c < k_s$ compromised drone nodes.
+  - [ ] **Byzantine Share Corruption**: Defense and detection when malicious nodes broadcast corrupted Shamir shares $(x, y')$ to attempt denial-of-reconstruction.
+  - [ ] **Swarm Drop-out & Split-Brain**: Rapid dropping of $N - k_s + 1$ containers to verify autonomous abort and RTL fail-safe.
 
