@@ -11,15 +11,15 @@ To ensure strict mathematical and architectural uniformity across all documentat
 
 | Symbol / Parameter | Canonical Definition | Standard Values / Ranges | Documented Equivalents (Unified) |
 | :--- | :--- | :--- | :--- |
-| **$n$** | Active swarm fleet size (number of drone nodes) | $n = \vert \text{Registered Drones} \vert \in [3, 50]$ | Lowercase $n$ strictly (never capital $N$) |
-| **$k_a$** | Command authorization threshold (peer approvals) | $k_s \le k_a \le n$ (e.g., $k_a \in \{3, 5, 7\}$) | Replaces generic $k$ for peer approval quorum |
-| **$k_s$** | Secret reconstruction threshold (Shamir polynomial shares) | $2 \le k_s \le k_a \le n$ (e.g., $k_s \in \{3, 5\}$) | Replaces generic $k$ for polynomial degree $(k_s - 1)$ |
-| **$N$** | Statistical benchmark sample size (iterations/runs) | $N \ge 100$ runs ($N=10$ pilot) | Capital $N$ strictly reserved for sample size |
+| **$n$** | Active swarm fleet size (number of drone nodes) | <span style="white-space:nowrap">$n = \vert \text{Registered Drones} \vert \in [3, 50]$</span> | Lowercase $n$ strictly (never capital $N$) |
+| **$k_a$** | Command authorization threshold (peer approvals) | <span style="white-space:nowrap">$k_s \le k_a \le n$</span> (e.g., $k_a \in \{3, 5, 7\}$) | Replaces generic $k$ for peer approval quorum |
+| **$k_s$** | Secret reconstruction threshold (Shamir polynomial shares) | <span style="white-space:nowrap">$2 \le k_s \le k_a \le n$</span> (e.g., $k_s \in \{3, 5\}$) | Replaces generic $k$ for polynomial degree $(k_s - 1)$ |
+| **$N$** | Statistical benchmark sample size (iterations/runs) | <span style="white-space:nowrap">$N \ge 100$ runs</span> ($N=10$ pilot) | Capital $N$ strictly reserved for sample size |
 | **$K_{\text{mesh}}$** | Swarm Mesh Session Key (AEAD broadcast encryption) | 256-bit symmetric key (`secrets.token_bytes(32)`) | Mesh broadcast cipher key |
 | **$K_{\text{mission}}$ ($S$)** | Master Mission Key ($S = f(0) \pmod p$) | 256-bit key embedded in $\mathbb{F}_p$ ($p = 2^{521} - 1$) | Mission payload cipher key |
-| **$W$** | Temporal anti-replay sliding window | $W = \pm 5.0\text{ s}$ ($2W = 10.0\text{ s}$ TTL cache) | Freshness window |
-| **$p_{\text{loss}}$** | Simulated RF mesh packet loss probability | $p_{\text{loss}} \in \{0.05, 0.10, 0.20\}$ (5%, 10%, 20%) | Loss probability |
-| **$m\text{-of-}n_{\text{gs}}$** | Multi-operator Ground Station threshold signature | $m \le n_{\text{gs}}$ (e.g., 2-of-3 GS operators) | Replaces generic $M$-of-$N$ |
+| **$W$** | Temporal anti-replay sliding window | <span style="white-space:nowrap">$W = \pm 5.0\text{ s}$</span> ($2W = 10.0\text{ s}$ TTL cache) | Freshness window |
+| **$p_{\text{loss}}$** | Simulated RF mesh packet loss probability | <span style="white-space:nowrap">$p_{\text{loss}} \in \{0.05, 0.10, 0.20\}$</span> (5%, 10%, 20%) | Loss probability |
+| <span style="white-space:nowrap">**$m$-of-$n_{\text{gs}}$**</span> | Multi-operator Ground Station threshold signature | <span style="white-space:nowrap">$m \le n_{\text{gs}}$</span> (e.g., 2-of-3 GS operators) | Replaces generic M-of-N notation |
 | **RAM Quotas** | Container memory cgroup limit | `256m` (256 MB default); `128m`, `512m` evaluated | Standardized MB / cgroup syntax |
 | **CPU Quotas** | Container CPU core throttling quota | `0.5` cores (default); `0.25`, `1.0` evaluated | Standardized core allocation |
 | **Payload Ceiling** | MQTT wire frame byte ceiling (`MAX_WIRE_PAYLOAD_BYTES`) | $128\text{ KB}$ ($131{,}072\text{ bytes}$) | Wire ingress/publish DoS barrier |
