@@ -113,7 +113,7 @@ Repository: `https://github.com/Aj-Shaer07/pqc.git`
   - [ ] Instrument per-container memory RSS (MB) tracking via `/sys/fs/cgroup/memory.current` / `psutil`.
   - [ ] Profile CPU utilization spikes (%) during peak concurrent Falcon-512 verification under constrained 0.5-core limits.
 - [ ] **Varying Network Conditions Simulation (Packet Loss & Jitter)**:
-  - [ ] Implement simulated RF mesh loss rates ($p_{\text{loss}} \in \{5\%, 10\%, 20\%\}$) and radio propagation jitter.
+  - [ ] Implement simulated RF mesh loss rates ($p_{\text{loss}} \in \{0.05, 0.10, 0.20\}$, i.e., 5%, 10%, 20%) and radio propagation jitter.
   - [ ] Quantify threshold consensus success rates and delay impact when $n > k_s$.
 - [ ] **Rogue Ground Station Defense (Autonomous Safety)**:
   - [ ] Autonomous safety policies & geofence checks (drones reject out-of-boundary commands even if signed by GS).
