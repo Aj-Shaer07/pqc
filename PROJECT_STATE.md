@@ -11,7 +11,7 @@ To ensure strict mathematical and architectural uniformity across all documentat
 
 | Symbol / Parameter | Canonical Definition | Standard Values / Ranges | Documented Equivalents (Unified) |
 | :--- | :--- | :--- | :--- |
-| **$n$** | Active swarm fleet size (number of drone nodes) | $n = |\text{Registered Drones}| \in [3, 50]$ | Lowercase $n$ strictly (never capital $N$) |
+| **$n$** | Active swarm fleet size (number of drone nodes) | $n = \vert \text{Registered Drones} \vert \in [3, 50]$ | Lowercase $n$ strictly (never capital $N$) |
 | **$k_a$** | Command authorization threshold (peer approvals) | $k_s \le k_a \le n$ (e.g., $k_a \in \{3, 5, 7\}$) | Replaces generic $k$ for peer approval quorum |
 | **$k_s$** | Secret reconstruction threshold (Shamir polynomial shares) | $2 \le k_s \le k_a \le n$ (e.g., $k_s \in \{3, 5\}$) | Replaces generic $k$ for polynomial degree $(k_s - 1)$ |
 | **$N$** | Statistical benchmark sample size (iterations/runs) | $N \ge 100$ runs ($N=10$ pilot) | Capital $N$ strictly reserved for sample size |
