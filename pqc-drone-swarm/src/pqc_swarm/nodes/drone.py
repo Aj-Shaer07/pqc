@@ -25,16 +25,22 @@ class DroneNode:
         self,
         drone_id: str,
         share: Tuple[int, int],
-        threshold: int,
-        trust_registry: TrustRegistry,
+        threshold: Optional[int] = None,
+        trust_registry: TrustRegistry = None,
         signer: Optional[FalconSigner] = None,
         anti_replay: Optional[AntiReplayFilter] = None,
         freshness_window_sec: float = 5.0,
         mesh_key: Optional[bytes] = None,
+        approval_threshold: Optional[int] = None,
+        reconstruct_threshold: Optional[int] = None,
     ):
         self.drone_id = drone_id
         self.share = share  # (x, y)
-        self.threshold = threshold
+        self.approval_threshold = approval_threshold if approval_threshold is not None else (threshold if threshold is not None else 3)
+        self.reconstruct_threshold = reconstruct_threshold if reconstruct_threshold is not None else (threshold if threshold is not None else self.approval_threshold)
+        self.threshold = self.reconstruct_threshold
+        self.ka = self.approval_threshold
+        self.ks = self.reconstruct_threshold
         self.trust_registry = trust_registry
         self.signer = signer or FalconSigner(512)
         self.anti_replay = anti_replay or AntiReplayFilter(window_seconds=freshness_window_sec)
@@ -330,12 +336,18 @@ class DroneNode:
             self.last_rejection_reason = None
             return True
 
+    def can_release_share(self, command_id: str) -> bool:
+        """Check if approval threshold ka is satisfied to release Shamir share."""
+        with self._state_lock:
+            approvals = self.peer_approvals.get(command_id, set())
+            return len(approvals) >= self.approval_threshold
+
     def can_execute(self, command_id: str) -> bool:
-        """Check if local threshold condition is satisfied."""
+        """Check if local execution condition is satisfied (approvals >= ka and shares >= ks)."""
         with self._state_lock:
             approvals = self.peer_approvals.get(command_id, set())
             shares = self.collected_shares.get(command_id, [])
-            return len(approvals) >= self.threshold and len(shares) >= self.threshold
+            return len(approvals) >= self.approval_threshold and len(shares) >= self.reconstruct_threshold
 
     def execute_command(self, command_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -350,7 +362,7 @@ class DroneNode:
             if not command:
                 return None
 
-            shares = list(self.collected_shares[command_id][: self.threshold])
+            shares = list(self.collected_shares[command_id][: self.reconstruct_threshold])
 
         recon_start = time.perf_counter()
         try:

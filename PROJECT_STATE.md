@@ -1,6 +1,6 @@
 # PQC Drone Swarm - Project State & Roadmap Tracker
 
-Last Updated: 2026-10-16
+Last Updated: 2026-10-17
 Repository: `https://github.com/Aj-Shaer07/pqc.git`
 
 ---
@@ -125,21 +125,21 @@ To ensure strict mathematical and architectural uniformity across all documentat
   - [x] **Standalone Multi-Vector Battery**: In-memory test harness (`./docker_commands.sh attack demo`) passing 100%.
 
 ### 3.2 Journal Refinements & Extended Empirical Profiling (IN PROGRESS 🟡)
-- [ ] **Decoupled Dual-Threshold Architecture ($k_a, k_s$)**:
-  - [ ] Parameterize independent command authorization threshold ($k_a$ peer approvals) and key reconstruction threshold ($k_s$ Shamir shares), where $k_s \le k_a \le n$.
-  - [ ] Evaluate security and availability trade-offs between authorization rigor ($k_a$) and mission availability ($k_s$) under node dropouts and packet loss.
-- [ ] **Statistical Rigor & Sample Size Scaling ($N \ge 100$)**:
-  - [ ] Scale automated benchmark harness from $N=10$ pilot runs to $N \ge 100$ runs across baseline configurations $(k, n) \in \{(3,5), (5,10), (10,20), (25,50)\}$ and decoupled dual-threshold $(k_a, k_s, n)$ configurations.
-  - [ ] Compute and report full statistical distributions: Mean ($\mu$), Standard Deviation ($\pm \sigma$), 95% Confidence Intervals, and Median/IQR.
-- [ ] **Comprehensive Performance Measurement & Telemetry Metrics**:
+- [x] **Decoupled Dual-Threshold Architecture ($k_a, k_s$)**:
+  - [x] Parameterize independent command authorization threshold ($k_a$ peer approvals) and key reconstruction threshold ($k_s$ Shamir shares), where $k_s \le k_a \le n$.
+  - [x] Evaluate security and availability trade-offs between authorization rigor ($k_a$) and mission availability ($k_s$) under node dropouts and packet loss across 4 operational profiles (Baseline, Balanced, High-Availability, Strict).
+- [x] **Statistical Rigor & Sample Size Scaling ($N \ge 100$)**:
+  - [x] Scale automated benchmark harness from $N=10$ pilot runs to $N \ge 100$ runs across baseline configurations $(k, n) \in \{(3,5), (5,10), (10,20), (25,50)\}$ and decoupled dual-threshold $(k_a, k_s, n)$ configurations across $n \in \{10, 20, 30, 40, 50\}$.
+  - [x] Compute and report full statistical distributions: Mean ($\mu$), Standard Deviation ($\pm \sigma$), 95% Confidence Intervals, and Median/IQR.
+- [x] **Comprehensive Performance Measurement & Telemetry Metrics**:
   - [x] **Cryptographic & Protocol Latency**: Quantify Falcon-512 signing/verification, SSS Lagrange reconstruction, and AEAD encryption/decryption durations per node.
   - [x] **End-to-End Consensus Time**: Measure latency from Ground Station command dispatch $\to$ peer approvals $\to$ share exchange $\to$ decentralized execution across $n$ nodes.
   - [x] **Automated Metrics Telemetry**: Collect distributed metrics via `swarm/telemetry` and report timing breakdowns on Ground Station.
-  - [ ] **Network & Bandwidth Wire Overhead Profiling**: Profile exact wire payload sizes: Commands ($\approx 1.2\text{ KB}$), Approvals ($\approx 780\text{ B}$), Encrypted Shares ($\approx 850\text{ B}$), and Telemetry ($\approx 350\text{ B}$). Quantify aggregate bandwidth (bytes/sec) over MQTT topics as swarm scales from $n=5$ to $n=50$.
-  - [ ] **Hardware Resource Profiling (Cgroups / Flight Computer Simulation)**: Instrument per-container memory RSS (MB) tracking via `/sys/fs/cgroup/memory.current` / `psutil`. Profile CPU utilization spikes (%) during peak concurrent Falcon-512 verification under constrained 0.5-core limits.
-- [ ] **Varying Network Conditions Simulation (Packet Loss & Jitter)**:
-  - [ ] Implement simulated RF mesh loss rates ($p_{\text{loss}} \in \{0.05, 0.10, 0.20\}$, i.e., 5%, 10%, 20%) and radio propagation jitter.
-  - [ ] Quantify threshold consensus success rates and delay impact when $n > k_a \ge k_s$.
+  - [x] **Network & Bandwidth Wire Overhead Profiling**: Profile exact wire payload sizes: Commands ($\approx 1{,}214\text{ B}$), Approvals ($\approx 778\text{ B}$), Encrypted Shares ($\approx 846\text{ B}$), and Telemetry ($\approx 350\text{ B}$). Quantify aggregate bandwidth (KB) over MQTT topics as swarm scales from $n=10$ to $n=50$.
+  - [x] **Hardware Resource Profiling (Cgroups / Flight Computer Simulation)**: Instrument per-container memory RSS (MB) tracking and CPU quota evaluation across Ultra-Constrained (128 MB, 0.25 core), Standard (256 MB, 0.50 core), and High-Cap (512 MB, 1.00 core) tiers across $n \in \{10, 20, 30, 40, 50\}$.
+- [x] **Varying Network Conditions Simulation (Packet Loss & Jitter)**:
+  - [x] Implement simulated RF mesh loss rates ($p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.20, 0.30\}$, i.e., 0%, 5%, 10%, 20%, 30%) and radio propagation jitter ($5\text{--}35\text{ ms}$).
+  - [x] Quantify threshold consensus success rates, accepted counts, and loss dropouts when $n > k_a \ge k_s$.
 - [ ] **Dynamic Swarm Membership, Churn & Fail-Safe Handling**:
   - [ ] Trust registry revocation lists broadcast over `swarm/registry`.
   - [ ] Dynamic onboarding of replacement drones with fresh shares without altering the master mission key ($K_{\text{mission}}$).

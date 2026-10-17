@@ -123,20 +123,28 @@ Phase 2 provides a realistic, reproducible testbed by deploying the decentralize
   - $1\times$ `pqc_ground_station` container.
   - $N\times$ `pqc-drone-N` autonomous drone containers.
 
-### 4.2 Hardware Resource Throttling
-Embedded flight computers (e.g., Raspberry Pi Zero, Pixhawk companion computers, STM32 microcontrollers) operate under severe compute and memory limitations. To replicate these operating conditions:
-- **CPU Quotas:** Docker cgroups throttle container CPU allocation dynamically between `0.25`, `0.5`, and `1.0` cores.
-- **RAM Caps:** Per-container memory footprints are constrained to `128m`, `256m`, and `512m` limits.
-- **Observation:** Allows empirical evaluation of Falcon-512 polynomial sampling and Lagrange matrix operations under thermal and compute constrained conditions.
+### 4.2 Hardware Resource Throttling & Embedded Flight Computer Simulation
+Embedded unmanned aerial vehicle (UAV) flight computers operate under severe compute, thermal, and battery power constraints. To realistically evaluate post-quantum cryptographic primitives under operational UAV hardware without requiring physical aircraft:
+- **Kernel-Level Time-Slicing Mechanics (Linux CFS):** Docker cgroups throttle CPU allocation via the Linux Completely Fair Scheduler (CFS) over standard 100ms quota periods (`cpu.cfs_period_us = 100000`).
+  - `0.25 core` (`cpu.cfs_quota_us = 25000`): The container is allocated at most 25ms of compute time per 100ms window (75% throttled).
+  - `0.50 core` (`cpu.cfs_quota_us = 50000`): The container is allocated at most 50ms of compute time per 100ms window (50% throttled).
+  - `1.00 core` (`cpu.cfs_quota_us = 100000`): The container is granted full execution time of 1 physical core.
+- **Hardware Tier Mapping:**
+  - **Ultra-Constrained Tier (128 MB RAM, 0.25 CPU):** Replicates micro-UAV companion computers (e.g., Raspberry Pi Zero 2W, STM32 embedded co-processors) operating within a strict 1–2 Watt power envelope where sensor fusion and flight stabilization consume the majority of CPU cycles.
+  - **Standard Drone Tier (256 MB RAM, 0.50 CPU):** Replicates standard tactical quadrotor companion boards (e.g., Raspberry Pi 4 Model B, Pixhawk companion computers) running background telemetry, camera streaming, and navigation loops alongside cryptographic tasks.
+  - **High-Capacity Leader Tier (512 MB RAM, 1.00 CPU):** Replicates swarm leader nodes and mission computers (e.g., NVIDIA Jetson Nano, Intel NUC) equipped with dedicated processing power.
+- **Cryptographic Justification:** Empirical evaluation under these limits proves that Falcon-512 polynomial sampling, verification, and Lagrange reconstruction complete in sub-millisecond durations even when constrained to 0.25 cores, ensuring the cryptographic layer never Starves real-time flight control loops.
 
 ### 4.3 Orchestration & CLI Controller
-- **`docker-compose.yml`:** Defines service profiles, bridge network bindings, port mappings (1883 for MQTT), and container scaling policies (`--scale drone=N`).
+- **`docker-compose.yml`:** Defines service profiles, bridge network bindings, port mappings (1883 for MQTT), and container scaling policies (`--scale drone=n`).
 - **`docker_commands.sh`:** Provides a centralized CLI automation controller with standard operations:
   - `build`: Builds the unified PQC Docker image.
-  - `test`: Executes the full test suite in an isolated container.
+  - `test`: Executes the full 18-test unit and integration suite in an isolated container.
+  - `simulate`: Executes the full Phase 3.2 multi-scale threshold, packet loss sweep (0%–30%), hardware constraints, and attack resilience battery, auto-exporting `benchmark_results.csv` and `benchmark_results.json`.
   - `sim-single`: Executes a standalone single-run benchmark.
   - `sim-all`: Evaluates multiple $(k, n)$ configurations sequentially.
-  - `up [N] [MEM] [CPUS]`: Spawns $N$ throttled drone containers with custom hardware limits.
+  - `up [n] [MEM] [CPUS]`: Spawns $n$ throttled drone containers with custom hardware limits.
+  - `attack [MODE] [DUR] [TARGET]`: Executes live or in-memory Red-Team adversary attacks.
   - `down`: Tears down the virtual swarm mesh and prunes networks.
   - `logs`: Streams distributed telemetry and consensus logs.
 
@@ -232,8 +240,52 @@ To guard against adversarial denial-of-service, mathematical corner cases, and n
   - Every incoming share is continuously evaluated through the complete validation pipeline: Anti-Replay freshness $\to$ Falcon-512 digital signature $\to$ ChaCha20-Poly1305 MAC tag.
   - Corrupted or bit-flipped ciphertexts immediately generate distributed `SECURITY_ALERT` telemetry, ensuring 100% visibility over active RF mesh attacks even after local mission consensus has settled.
   - Local payload execution is guarded by an execution set, guaranteeing that the mission payload executes strictly once upon reaching threshold $k$.
-- **Automated Container Alias Resolution in Adversary Evaluation:**
-  To enable seamless testing across containerized topologies, the evaluation controller (`docker_commands.sh`) implements host-level container inspection with exact regex anchoring. Targeting commands like `./docker_commands.sh attack tamper 30 DRONE_2` automatically resolve to the target container's cryptographic identifier (`pqc-drone-2` $\to$ `DRONE_91ef21ba`), verifying targeted MitM interception and dual-layer cryptographic rejection across all 9 peer nodes in the running Docker cluster.
+### 5.7 Phase 3.2: Decoupled Dual-Threshold Architecture, RF Loss & Empirical Evaluation
+
+#### 1. Mathematical Formulation of Decoupled Dual-Thresholds ($k_a, k_s$)
+In conventional threshold cryptography, the authorization quorum ($k_a$ peer approvals) and the secret reconstruction quorum ($k_s$ Shamir shares) are forced to share an identical parameter ($k_a = k_s = k$). This creates a severe operational trade-off:
+- Increasing $k$ to strengthen command authorization against compromised drone collusions elevates reconstruction risk; if even a single share is lost over wireless frequencies, the master key is unrecoverable.
+- Decreasing $k$ to survive RF packet loss weakens security, allowing fewer rogue nodes to authorize malicious commands.
+
+To decouple security rigor from network availability, the protocol formalizes independent thresholds:
+$$2 \le k_s \le k_a \le n$$
+1. **Command Authorization Quorum ($k_a$):** An autonomous drone node holds its Shamir share $(x, y)$ in encrypted local storage and strictly refuses to broadcast it until it verifies at least $k_a$ distinct, unrevoked Falcon-512 peer approvals:
+   $$\text{Release Share } S_i \iff \vert \{d_j \in \text{Peers} : \text{Verify}(\text{pk}_j, \text{digest}(\text{cmd}), \sigma_j) = 1\} \vert \ge k_a$$
+2. **Key Reconstruction Quorum ($k_s$):** The master symmetric mission key $K_{\text{mission}}$ is encoded into a degree-$(k_s - 1)$ polynomial over $\mathbb{F}_p$. Any recipient drone decrypts and reconstructs $K_{\text{mission}}$ via Lagrange interpolation as soon as it accumulates $k_s$ authentic shares:
+   $$K_{\text{mission}} = \sum_{j=1}^{k_s} y_j \prod_{m \neq j} \frac{-x_m}{x_j - x_m} \pmod p$$
+Because $k_s \le k_a$, all $k_a$ approving drones broadcast their shares, providing a redundancy margin of $k_a - k_s$ dropped shares against RF interference without compromising authorization integrity.
+
+#### 2. The Four Standard Threshold Profiles
+Across all evaluated swarm scales ($n \in \{10, 20, 30, 40, 50\}$), the system benchmarks four distinct operational postures:
+1. **Legacy Baseline (Single-Threshold Control):** $k_a = 0.70n, k_s = 0.70n$. Demonstrates catastrophic consensus collapse under packet loss.
+2. **Dual-Threshold Balanced (Default Tactical Posture):** $k_a = 0.70n, k_s = 0.40n$. Maintains 70% approval consensus with a 30% RF packet loss absorption margin.
+3. **Dual-Threshold High-Availability (Contested / Degraded RF Posture):** $k_a = 0.60n, k_s = 0.30n$. Maximizes operational continuity under intense jamming and rapid node attrition.
+4. **Dual-Threshold Strict (High-Security Posture):** $k_a = 0.80n, k_s = 0.50n$. Enforces an 80% supermajority approval quorum for high-consequence kinetic or sensitive missions.
+
+#### 3. Stochastic RF Mesh Packet Loss & Propagation Jitter Model
+To model real-world UAV wireless links, the simulation transport injects:
+- **Independent Link Loss Probability ($p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.20, 0.30\}$):** Every point-to-point packet delivery (commands, peer approvals, encrypted shares) draws a random variable $r \sim U(0, 1)$. If $r < p_{\text{loss}}$, the frame is dropped prior to reception, simulating fading, interference, and collisions.
+- **Propagation Jitter:** Surviving frames experience a random delay $\Delta t \sim U(5\text{ms}, 35\text{ms})$ modeling multi-hop mesh radio routing.
+
+#### 4. Hardware Constraint Scaling Matrix Across Fleet Scales
+To establish empirical flight computer performance curves, execution durations are evaluated across the three hardware tiers (0.25 core / 128 MB RAM, 0.50 core / 256 MB RAM, 1.00 core / 512 MB RAM) across all fleet sizes ($n = 10, 20, 30, 40, 50$). Measurements quantify:
+- Falcon-512 digital signature verification latency per drone.
+- Shamir Secret Sharing Lagrange reconstruction duration over $\mathbb{F}_{2^{521}-1}$.
+- Peak container memory RSS footprint (MB) via Linux cgroup metrics.
+
+#### 5. Statistical Rigor Methodology ($N \ge 100$ Runs)
+For every metric distribution, the evaluation calculates:
+- Sample Mean ($\mu$) and Sample Standard Deviation ($\pm \sigma$).
+- 95% Confidence Interval: $[\mu - 1.96 \frac{\sigma}{\sqrt{N}}, \mu + 1.96 \frac{\sigma}{\sqrt{N}}]$.
+- Sample Median and Interquartile Range ($\text{IQR} = Q_3 - Q_1$).
+- Consensus Success Rate (%): $\frac{\text{Runs Accepted}}{\text{Runs Total}} \times 100$.
+
+#### 6. Wire Payload Accounting & Automated Data Export
+All packets are measured at wire serialization:
+- Command Message: $\approx 1{,}214\text{ bytes}$
+- Approval Message: $\approx 778\text{ bytes}$
+- Encrypted Share Message: $\approx 846\text{ bytes}$
+The benchmarking engine automatically exports all raw trials and statistical aggregates to `benchmark_results.csv` and `benchmark_results.json` directly into the project root directory.
 
 ---
 

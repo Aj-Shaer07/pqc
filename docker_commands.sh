@@ -19,6 +19,10 @@ show_help() {
     echo "Usage: ./docker_commands.sh [command] [options]"
     echo ""
     echo "Commands:"
+    echo "  simulate [N] [KA] [KS] [LOSS] [RUNS] [MEM] [CPUS]"
+    echo "                         Run comprehensive Phase 3.2 simulation (multi-scale sweep,"
+    echo "                         packet loss sweep, hardware constraints & attack containment)."
+    echo "                         Auto-exports benchmark_results.csv and benchmark_results.json."
     echo "  build                  Build the base Debian-slim Docker image"
     echo "  test                   Run unit tests inside an isolated container"
     echo "  sim-single             Run single benchmark inside container (k=3, n=5)"
@@ -31,6 +35,9 @@ show_help() {
     echo "  logs                   Follow real-time logs from all swarm nodes"
     echo ""
     echo "Examples:"
+    echo "  ./docker_commands.sh simulate            # Full evaluation matrix & summary (Tables 1, 2, 3)"
+    echo "  ./docker_commands.sh simulate 10 7 4     # Custom single run: n=10, ka=7, ks=4"
+    echo "  ./docker_commands.sh simulate 10 7 4 0.10 100 # n=10, ka=7, ks=4, 10% loss, 100 runs"
     echo "  ./docker_commands.sh build"
     echo "  ./docker_commands.sh test"
     echo "  ./docker_commands.sh attack demo         # In-memory security validation battery"
@@ -55,7 +62,7 @@ case "$CMD" in
 
     test)
         echo "[*] Running unit test battery inside isolated container..."
-        docker run --rm pqc-drone-swarm:latest
+        docker run --rm -v "$PWD/pqc-drone-swarm:/app/pqc-drone-swarm" pqc-drone-swarm:latest
         ;;
 
     attack)
@@ -108,6 +115,66 @@ case "$CMD" in
         RUNS=${2:-3}
         echo "[*] Running full benchmark across all configurations ($RUNS runs each)..."
         docker run --rm pqc-drone-swarm:latest python3 run_simulation.py -r "$RUNS"
+        ;;
+
+    simulate)
+        # Usage: ./docker_commands.sh simulate [--quick] OR [n] [ka] [ks] [loss] [runs] [mem] [cpus]
+        EXTRA_ARGS=()
+        SIM_MEM=$DEFAULT_MEMORY
+        SIM_CPUS=$DEFAULT_CPUS
+
+        if [ "$2" = "--quick" ] || [ "$2" = "-q" ]; then
+            EXTRA_ARGS+=(--quick)
+            TARGET_RUNS=${3:-""}
+            if [ -n "$TARGET_RUNS" ]; then
+                EXTRA_ARGS+=(-r "$TARGET_RUNS")
+            fi
+        elif [[ "$2" == -* ]]; then
+            # Forward flags directly
+            shift
+            EXTRA_ARGS=("$@")
+        else
+            TARGET_N=${2:-""}
+            TARGET_KA=${3:-""}
+            TARGET_KS=${4:-""}
+            TARGET_LOSS=${5:-""}
+            TARGET_RUNS=${6:-""}
+            SIM_MEM=${7:-$DEFAULT_MEMORY}
+            SIM_CPUS=${8:-$DEFAULT_CPUS}
+
+            if [ -n "$TARGET_N" ] && [ -n "$TARGET_KA" ] && [ -n "$TARGET_KS" ]; then
+                EXTRA_ARGS+=(--single -n "$TARGET_N" --ka "$TARGET_KA" --ks "$TARGET_KS")
+            elif [ -n "$TARGET_N" ]; then
+                EXTRA_ARGS+=(-n "$TARGET_N")
+            fi
+
+            if [ -n "$TARGET_LOSS" ]; then
+                EXTRA_ARGS+=(--loss "$TARGET_LOSS")
+            fi
+
+            if [ -n "$TARGET_RUNS" ]; then
+                EXTRA_ARGS+=(-r "$TARGET_RUNS")
+            fi
+        fi
+
+        echo "================================================================="
+        echo "🚀 Running PQC Swarm Comprehensive Simulation (Phase 3.2)"
+        echo "   Memory Limit: $SIM_MEM | CPU Quota: $SIM_CPUS"
+        echo "   Export CSV:   $PWD/benchmark_results.csv"
+        echo "   Export JSON:  $PWD/benchmark_results.json"
+        echo "================================================================="
+
+        docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$PWD/pqc-drone-swarm:/app/pqc-drone-swarm" \
+            -w /app/pqc-drone-swarm \
+            --memory="$SIM_MEM" \
+            --cpus="$SIM_CPUS" \
+            pqc-drone-swarm:latest \
+            python3 run_simulation.py \
+            --csv /workspace/benchmark_results.csv \
+            --json /workspace/benchmark_results.json \
+            "${EXTRA_ARGS[@]}"
         ;;
 
     up)

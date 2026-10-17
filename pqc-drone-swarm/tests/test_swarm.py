@@ -421,6 +421,56 @@ class TestPQCDroneSwarm(unittest.TestCase):
         self.assertFalse(accepted2)
         self.assertIn("Duplicate share submission from peer", d1.last_rejection_reason)
 
+    def test_decoupled_dual_threshold_architecture(self):
+        """Verify that decoupled dual-threshold (ka, ks) strictly gates share release at ka and reconstruction at ks."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        registry.set_gs_public_key(gs.public_key)
+
+        mission_key = generate_mission_key()
+        mission_key_int = int.from_bytes(mission_key, "big")
+        # Generate shares with reconstruction threshold ks = 2, total n = 5
+        shares = generate_shares(mission_key_int, threshold=2, num_shares=5)
+
+        # Drones initialized with approval threshold ka = 4, reconstruction threshold ks = 2
+        drones = [
+            DroneNode(f"DRONE_{i+1}", shares[i], approval_threshold=4, reconstruct_threshold=2, trust_registry=registry)
+            for i in range(5)
+        ]
+        for d in drones:
+            registry.register_drone(d.drone_id, d.public_key)
+
+        payload = {"action": "TARGET_WAYPOINT", "wp": [10.5, 20.2]}
+        cmd, _ = gs.create_command(payload, mission_key)
+
+        for d in drones:
+            d.verify_gs_command(cmd)
+
+        approvals = [d.create_approval(cmd.command_id)[0] for d in drones]
+
+        # Deliver 3 approvals to DRONE_1 (3 < ka=4)
+        for app in approvals[1:3]:  # deliver 2 peer approvals + 1 self approval conceptually
+            drones[0].process_peer_approval(app)
+
+        # DRONE_1 must NOT release share because approvals (2) < ka (4)
+        self.assertFalse(drones[0].can_release_share(cmd.command_id))
+
+        # Deliver 2 more approvals to DRONE_1 so total approvals >= 4
+        drones[0].process_peer_approval(approvals[3])
+        drones[0].process_peer_approval(approvals[4])
+        self.assertTrue(drones[0].can_release_share(cmd.command_id))
+
+        # Now test reconstruction: DRONE_1 receives shares from DRONE_2 and DRONE_3 (2 shares == ks=2)
+        s2 = drones[1].provide_share(cmd.command_id)
+        s3 = drones[2].provide_share(cmd.command_id)
+        drones[0].receive_share(s2)
+        drones[0].receive_share(s3)
+
+        # With 4 approvals (>= ka) and 2 shares (>= ks), execution is authorized
+        self.assertTrue(drones[0].can_execute(cmd.command_id))
+        res = drones[0].execute_command(cmd.command_id)
+        self.assertEqual(res, payload)
+
     def test_mqtt_transport_payload_size_enforcement(self):
         """Verify that SwarmMQTTTransport rejects publishing payloads exceeding MAX_WIRE_PAYLOAD_BYTES (128KB)."""
         transport = SwarmMQTTTransport("TEST_DRONE", "127.0.0.1", 1883)

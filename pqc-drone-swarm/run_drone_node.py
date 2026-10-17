@@ -42,12 +42,14 @@ def main():
     broker_host = os.getenv("MQTT_BROKER", "localhost")
     broker_port = int(os.getenv("MQTT_PORT", "1883"))
     threshold = int(os.getenv("THRESHOLD", "3"))
+    approval_threshold = int(os.getenv("SWARM_KA", os.getenv("THRESHOLD", "3")))
+    reconstruct_threshold = int(os.getenv("SWARM_KS", os.getenv("THRESHOLD", "3")))
 
     # Extract unique Drone ID from container hostname or env
     hostname = os.getenv("HOSTNAME", "node")[:8]
     drone_id = os.getenv("DRONE_ID", f"DRONE_{hostname}")
 
-    logger.info(f"🚀 Initializing Autonomous Drone Node: {drone_id} (Threshold k={threshold})")
+    logger.info(f"🚀 Initializing Autonomous Drone Node: {drone_id} (ka={approval_threshold}, ks={reconstruct_threshold})")
 
     trust_registry = TrustRegistry()
     
@@ -63,7 +65,9 @@ def main():
     drone = DroneNode(
         drone_id=drone_id,
         share=(node_index, 0),
-        threshold=threshold,
+        threshold=reconstruct_threshold,
+        approval_threshold=approval_threshold,
+        reconstruct_threshold=reconstruct_threshold,
         trust_registry=trust_registry,
         mesh_key=mesh_key,
     )
@@ -176,12 +180,12 @@ def main():
         valid, elapsed = drone.process_peer_approval(app)
         if valid:
             current_approvals = len(drone.peer_approvals.get(app.command_id, set()))
-            logger.info(f"[{drone_id}] Verified approval from {app.drone_id} in {elapsed*1000:.2f}ms. (Total: {current_approvals}/{threshold})")
+            logger.info(f"[{drone_id}] Verified approval from {app.drone_id} in {elapsed*1000:.2f}ms. (Total: {current_approvals}/{drone.approval_threshold})")
 
-            # If threshold k met for approvals, broadcast Shamir share once
-            if current_approvals >= threshold and app.command_id not in broadcasted_shares:
+            # If approval threshold ka met, broadcast Shamir share once
+            if drone.can_release_share(app.command_id) and app.command_id not in broadcasted_shares:
                 broadcasted_shares.add(app.command_id)
-                logger.info(f"[{drone_id}] 🎯 Threshold {threshold} met for approvals! Broadcasting Shamir share...")
+                logger.info(f"[{drone_id}] 🎯 Approval threshold ka={drone.approval_threshold} met! Broadcasting Shamir share...")
                 share_msg = drone.provide_share(app.command_id)
                 transport.publish(TOPIC_SHARES, share_msg.to_dict())
         else:
