@@ -87,15 +87,58 @@ The communication layer uses MQTT (Message Queuing Telemetry Transport) over TCP
 - **Why MQTT?** MQTT provides lightweight packet headers, bi-directional topic-based filtering, and low CPU/network overhead. In a simulated mesh environment, the broker serves as a virtual broadcast medium where each topic corresponds to an isolated operational channel.
 - **Reconnection & Resilience:** Handles automatic background event looping (`client.loop_start()`) and resilient exponential connection retries against network churn.
 
-### 3.3 Swarm Topic Routing & Message Workflow
+### 3.3 Swarm Topic Routing, Cryptographic Breakdown & Architectural Rationale
 
-| Topic Channel | Sender | Receiver | Functional Purpose |
-| :--- | :--- | :--- | :--- |
-| `swarm/commands` | Ground Station | Swarm (All Drones) | Broadcasts mission commands containing ciphertext, 96-bit nonce, timestamp, AAD, and the Ground Station's Falcon-512 signature. |
-| `swarm/approvals` | Drone Nodes | Peer Drones | Peer-to-peer gossip channel. Drones broadcast signed approval messages after verifying Ground Station signature and timestamp freshness. |
-| `swarm/shares` | Drone Nodes | Peer Drones | Threshold share exchange. Once a drone receives $\ge k$ verified approvals for a command, it publishes its signed Shamir share $(x, y)$. |
-| `swarm/registry` | Nodes / GS | Swarm (All Drones) | Trust discovery channel. Transmits node registrations and Falcon-512 public keys to populate local trust tables. |
-| `swarm/telemetry` | Drone Nodes | Ground Station | Execution reporting. Reports mission execution acknowledgments and granular timing benchmarks (latency breakdowns). |
+To balance post-quantum confidentiality, unforgeable authenticity, and computational efficiency on resource-constrained micro-UAVs, the protocol enforces differentiated cryptographic protections across its five MQTT topics:
+
+#### 1. Channel Security Matrix & Wire Protection Breakdown
+
+| Topic Channel | Encrypted? | Cryptographic Primitive Applied | Information Carried & Wire Content | Functional Purpose & Security Role |
+| :--- | :---: | :--- | :--- | :--- |
+| **`swarm/commands`** | **YES** | **ChaCha20-Poly1305 AEAD** (Mission Key) + **Falcon-512** Signature | Ciphertext payload, 96-bit nonce, timestamp, AAD, and Ground Station digital signature. | Mission command dispatch. Guarantees end-to-end mission confidentiality, message integrity, and Ground Station origin authentication. |
+| **`swarm/shares`** | **YES** | **ChaCha20-Poly1305 AEAD** ($K_{\text{mesh}}$) + **Falcon-512** Signature | Encrypted Shamir share coordinates, 96-bit nonce, timestamp, AAD, and drone digital signature. Coordinates $(x, y)$ are strictly absent in plaintext. | Threshold secret reconstruction. Guarantees wire confidentiality, preventing passive wire sniffers from harvesting $k_s$ shares to compromise the mission key. |
+| **`swarm/approvals`** | **NO** | **Falcon-512** Digital Signature + **Anti-Replay Filter** | Command ID, Drone ID, timestamp, and local Falcon-512 digital signature over the approval digest. | Peer-to-peer voting quorum. Provides unforgeable digital ballots, sender non-repudiation, and temporal replay defense. |
+| **`swarm/registry`** | **NO** | Plaintext Public Announcements (Integrity verified via Trust Registry) | Node IDs and Falcon-512 public keys ($\approx 897\text{ bytes}$). | Swarm discovery & trust bootstrapping. Announces public keys to populate local trust tables across the fleet. |
+| **`swarm/telemetry`** | **NO** | Plaintext Structured JSON | Execution status acknowledgments, microsecond latency benchmarks, and `SECURITY_ALERT` intrusion notifications. | Fleet telemetry & monitoring. Transmits execution confirmations and distributed intrusion detection alerts to the Ground Station. |
+
+---
+
+#### 2. Architectural & Cryptographic Rationale by Channel
+
+##### A. `swarm/commands` — Confidentiality & Origin Non-Repudiation (Encrypted + Signed)
+- **Why Encryption is Mandatory:** Operational commands contain sensitive UAV flight trajectories, target coordinates, reconnaissance waypoints, and kinetic engagement triggers. Transmitting in plaintext would allow passive adversary interception. The payload is encrypted under the symmetric master mission key $K_{\text{mission}}$ using ChaCha20-Poly1305.
+- **Why Falcon-512 Signing is Mandatory:** An adversary must be strictly prevented from injecting unauthorized commands. The Ground Station signs the SHA-256 digest of the encrypted payload and associated metadata with its private Falcon-512 lattice key. Drones reject any command not verifiable against their pinned Ground Station trust root.
+
+##### B. `swarm/shares` — Wire Confidentiality & Anti-Harvesting Defense (Encrypted + Signed)
+- **Why Encryption is Mandatory:** In classical Shamir Secret Sharing, shares $(x_i, y_i)$ are distributed directly. However, in an open wireless RF mesh, a passive eavesdropper (Dolev-Yao attacker) monitoring the broadcast topic could passively accumulate $k_s$ shares and reconstruct $K_{\text{mission}}$ without ever compromising a physical drone node.
+- **The Broadcast Encryption Solution:** Each drone encrypts its share coordinate pair `{"x": x, "y": y}` under the Swarm Mesh Session Key ($K_{\text{mesh}}$) with ChaCha20-Poly1305 before transmission. Plaintext coordinates $(x, y)$ are completely scrubbed from wire serialization.
+- **Why Falcon-512 Signing is Mandatory:** Prevents active Man-in-the-Middle (MitM) bit-flipping attacks. Drones verify the sender's Falcon-512 signature before attempting AEAD decryption, enforcing dual-layer cryptographic rejection.
+
+##### C. `swarm/approvals` — Authenticated Digital Ballots (Signed Only, Unencrypted)
+A common question in distributed threshold protocols is: *Why are peer approvals not encrypted?*
+1. **The Nature of an Approval (A Digital Ballot, Not a Secret):**
+   An approval contains only `command_id`, `drone_id`, `timestamp`, and `signature_hex`. It carries **zero secret keys, zero Shamir coordinates, and zero mission parameters**. An approval is functionally an authenticated ballot declaring: *"I, Drone $i$, have verified the Ground Station's Falcon-512 signature on Command $C$ and vote YES to authorize releasing shares."*
+2. **Public Verifiability in Distributed Consensus:**
+   In decentralized consensus architectures (such as PBFT, Raft, or Byzantine fault-tolerant threshold networks), **votes are deliberately public to all participating validator nodes**. Every peer drone must independently verify incoming approvals using the sender's public key from its local `TrustRegistry`. Encrypting approvals would necessitate pairwise session keys ($O(n^2)$ key-management complexity) or redundant symmetric decryptions across every gossiped peer vote.
+3. **Computational Resource Conservation on Micro-UAVs:**
+   In a swarm of $n$ drones, peer approval gossip generates $n \times (n - 1)$ transmission links. Omitting symmetric encryption eliminates $n^2$ redundant ChaCha20-Poly1305 encryption/decryption cycles and nonce-tracking states, preserving precious CPU cycles and battery power on micro-UAV companion computers.
+4. **Adequacy of Digital Signatures for Security:**
+   The security of the approval mechanism depends on **Authenticity, Integrity, and Freshness**, not confidentiality:
+   - *Lattice SIS Hardness:* Falcon-512 prevents adversaries from forging approvals.
+   - *Integrity:* Any tampered bit in `command_id` or `drone_id` immediately causes signature verification failure.
+   - *Freshness:* The `AntiReplayFilter` rejects replayed historical approvals outside the sliding window ($W = \pm 5.0\text{s}$) and drops duplicate identifiers.
+5. **Operational Stealth Nuance (Traffic Analysis vs. Secrecy):**
+   An eavesdropper sniffing `swarm/approvals` learns zero mission secrets. However, an adversary monitoring the RF spectrum can observe that *a consensus vote is currently occurring*. If operational stealth (Emission Security / COMSEC) is strictly demanded in contested electronic warfare airspace, approvals can optionally be wrapped in $K_{\text{mesh}}$ AEAD encryption to present uniform Shannon entropy (~7.99 bits/byte) across all RF transmissions.
+
+##### D. `swarm/registry` — Identity Discovery (Plaintext Public Keys)
+- Public keys are mathematically public parameters intended to be distributed openly. Confidentiality is not required.
+- Trust bootstrapping is secured via out-of-band pre-shared trust certificates or signed announcements from the Ground Station, ensuring that rogue public keys cannot hijack honest node identities.
+
+##### E. `swarm/telemetry` — Low-Overhead Health & IDS Auditing (Plaintext Metrics)
+- **Zero Secret Exposure:** Telemetry messages transmit only execution confirmations (`status: "EXECUTED"`), microsecond latency breakdowns, and intrusion detection alerts (`event: "SECURITY_ALERT"`). Zero key bits or mission payloads are exposed.
+- **Low Compute Overhead:** Eliminates unnecessary cryptographic wrapping for simple status telemetry streams.
+- **Transparent IDS Auditing:** Allows ground operators, external flight loggers, and automated test harnesses (`simulate_adversary.py`) to transparently audit swarm health and active cyber attacks without requiring cryptographic session keys.
+- **Stealth Trade-off:** As with approvals, in deep-stealth military operations where even mission completion timestamps must be shielded from RF traffic analysis, telemetry packets can be encapsulated under $K_{\text{mesh}}$ or transported over mutually authenticated TLS (MQTT port 8883).
 
 ### 3.4 Operational Protocol Flow
 1. **Command Ingestion:** Ground Station broadcasts a command on `swarm/commands`.
