@@ -253,6 +253,27 @@ def run_comprehensive_benchmarks(
     total_configs = len(test_matrix)
     print(f"[*] Starting execution of {total_configs} configuration combinations ({num_runs} iterations each)...")
 
+    # Persistent swarm cache per fleet scale to avoid redundant key generation
+    swarm_cache: Dict[int, Tuple[GroundStationNode, List[DroneNode]]] = {}
+
+    def get_or_create_swarm(fleet_size: int) -> Tuple[GroundStationNode, List[DroneNode]]:
+        if fleet_size not in swarm_cache:
+            reg = TrustRegistry()
+            gs_node = GroundStationNode()
+            reg.set_gs_public_key(gs_node.public_key)
+            drone_list = []
+            for i in range(fleet_size):
+                d = DroneNode(
+                    drone_id=f"DRONE_{i+1}",
+                    share=(i + 1, 1),
+                    threshold=3,
+                    trust_registry=reg,
+                )
+                reg.register_drone(d.drone_id, d.public_key)
+                drone_list.append(d)
+            swarm_cache[fleet_size] = (gs_node, drone_list)
+        return swarm_cache[fleet_size]
+
     for idx, (n, p_name, ka, ks, loss_rate) in enumerate(test_matrix, 1):
         loss_pct_str = f"{int(loss_rate * 100)}%"
         print(f"  [{idx:02d}/{total_configs:02d}] Testing n={n:02d} | {p_name:<32} (ka={ka:02d}, ks={ks:02d}) | Loss={loss_pct_str:>3}... ", end="", flush=True)
@@ -269,6 +290,8 @@ def run_comprehensive_benchmarks(
         wire_share = 0
         wire_total = 0
 
+        gs_cached, drones_cached = get_or_create_swarm(n)
+
         for r in range(num_runs):
             # Realistic radio jitter between 5ms and 35ms
             res = run_decentralized_simulation(
@@ -279,6 +302,8 @@ def run_comprehensive_benchmarks(
                 min_jitter_ms=5.0,
                 max_jitter_ms=35.0,
                 profile_name=p_name,
+                cached_drones=drones_cached,
+                cached_gs=gs_cached,
             )
 
             if res["success"]:
@@ -344,8 +369,16 @@ def run_comprehensive_benchmarks(
             ka = max(2, int(round(n * 0.70)))
             ks = max(2, int(round(n * 0.40)))
 
+            gs_cached, drones_cached = get_or_create_swarm(n)
             # Base measurements under standard 0.5 CPU
-            base_run = run_decentralized_simulation(n=n, ka=ka, ks=ks, loss_rate=0.0)
+            base_run = run_decentralized_simulation(
+                n=n,
+                ka=ka,
+                ks=ks,
+                loss_rate=0.0,
+                cached_drones=drones_cached,
+                cached_gs=gs_cached,
+            )
             base_verify = base_run["drone_verify_avg"] * 1000.0
             base_recon = base_run["reconstruct_avg"] * 1000.0
             base_consensus = base_run["consensus_time_avg"] * 1000.0

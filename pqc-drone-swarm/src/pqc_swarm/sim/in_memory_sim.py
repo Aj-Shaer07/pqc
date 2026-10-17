@@ -22,6 +22,8 @@ def run_decentralized_simulation(
     max_jitter_ms: float = 0.0,
     use_encrypted_shares: bool = True,
     profile_name: str = "Standard",
+    cached_drones: Optional[List[DroneNode]] = None,
+    cached_gs: Optional[GroundStationNode] = None,
 ) -> Dict[str, Any]:
     """
     Executes a fully decentralized in-memory round with:
@@ -38,7 +40,6 @@ def run_decentralized_simulation(
     eff_ks = ks if ks is not None else (k if k is not None else eff_ka)
     k_val = eff_ks
 
-    trust_registry = TrustRegistry()
     mission_key = generate_mission_key()
     mission_key_int = int.from_bytes(mission_key, byteorder="big")
     mesh_key = generate_mission_key() if use_encrypted_shares else None
@@ -46,23 +47,38 @@ def run_decentralized_simulation(
     # Generate Shamir shares of degree ks - 1 over Mersenne prime field
     shares = generate_shares(mission_key_int, threshold=eff_ks, num_shares=n)
 
-    # Initialize drones with decoupled thresholds
-    drones: List[DroneNode] = []
-    for i, share in enumerate(shares):
-        drone = DroneNode(
-            drone_id=f"DRONE_{i+1}",
-            share=share,
-            threshold=eff_ks,
-            approval_threshold=eff_ka,
-            reconstruct_threshold=eff_ks,
-            trust_registry=trust_registry,
-            mesh_key=mesh_key,
-        )
-        drones.append(drone)
+    # Initialize or reuse Ground Station
+    if cached_gs is not None:
+        gs = cached_gs
+    else:
+        gs = GroundStationNode()
 
-    # Initialize Ground Station
-    gs = GroundStationNode()
-    trust_registry.set_gs_public_key(gs.public_key)
+    # Initialize or reuse persistent drone nodes (avoiding redundant Falcon keygen per trial)
+    if cached_drones is not None and len(cached_drones) >= n:
+        drones = cached_drones[:n]
+        for i, share in enumerate(shares):
+            d = drones[i]
+            d.share = share
+            d.threshold = eff_ks
+            d.approval_threshold = eff_ka
+            d.reconstruct_threshold = eff_ks
+            d.mesh_key = mesh_key
+    else:
+        trust_registry = TrustRegistry()
+        trust_registry.set_gs_public_key(gs.public_key)
+        drones = []
+        for i, share in enumerate(shares):
+            drone = DroneNode(
+                drone_id=f"DRONE_{i+1}",
+                share=share,
+                threshold=eff_ks,
+                approval_threshold=eff_ka,
+                reconstruct_threshold=eff_ks,
+                trust_registry=trust_registry,
+                mesh_key=mesh_key,
+            )
+            trust_registry.register_drone(drone.drone_id, drone.public_key)
+            drones.append(drone)
 
     payload = {"action": "NAVIGATE_WAYPOINT", "lat": 37.7749, "lon": -122.4194, "alt": 120}
     command, gs_sign_time = gs.create_command(payload, mission_key)
@@ -79,13 +95,14 @@ def run_decentralized_simulation(
     approving_drones: List[DroneNode] = []
     approvals_map: Dict[str, Any] = {}
 
+    # RF broadcast wave propagation delay
+    if max_jitter_ms > 0.0:
+        time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
+
     for drone in drones:
         # Check simulated RF loss on command reception
         if loss_rate > 0.0 and random.random() < loss_rate:
             continue  # Command dropped on this link
-
-        if max_jitter_ms > 0.0:
-            time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
 
         is_valid, v_time = drone.verify_gs_command(command)
         drone_verify_times.append(v_time)
@@ -99,6 +116,9 @@ def run_decentralized_simulation(
 
     # Step 2: Drones gossip approvals peer-to-peer
     peer_verify_times = []
+    if max_jitter_ms > 0.0 and approving_drones:
+        time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
+
     for sender_drone in approving_drones:
         app = approvals_map[sender_drone.drone_id]
         for receiver_drone in drones:
@@ -107,9 +127,6 @@ def run_decentralized_simulation(
                 # Check simulated RF loss on peer approval link
                 if loss_rate > 0.0 and random.random() < loss_rate:
                     continue  # Approval dropped
-
-                if max_jitter_ms > 0.0:
-                    time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
 
                 valid_peer, pv_time = receiver_drone.process_peer_approval(app)
                 peer_verify_times.append(pv_time)
@@ -123,7 +140,10 @@ def run_decentralized_simulation(
             if share_wire_bytes == 0:
                 share_wire_bytes = len(json.dumps(share_msg.to_dict()).encode("utf-8"))
 
-    # Gossip shares among peers
+    # Gossip shares among peers over RF mesh wave
+    if max_jitter_ms > 0.0 and shares_broadcasted:
+        time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
+
     for sender_id, share_msg in shares_broadcasted.items():
         for receiver_drone in drones:
             if receiver_drone.drone_id != sender_id:
@@ -131,9 +151,6 @@ def run_decentralized_simulation(
                 # Check simulated RF loss on share gossip link
                 if loss_rate > 0.0 and random.random() < loss_rate:
                     continue  # Share dropped
-
-                if max_jitter_ms > 0.0:
-                    time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
 
                 receiver_drone.receive_share(share_msg)
 
