@@ -79,3 +79,11 @@ htmlcov/
 ehthumbs.db
 Thumbs.db
 *.log
+
+# =================================================================
+# Simulation & Benchmark Datasets
+# =================================================================
+benchmark_results.csv
+benchmark_results.json
+benchmark_*.csv
+benchmark_*.json
