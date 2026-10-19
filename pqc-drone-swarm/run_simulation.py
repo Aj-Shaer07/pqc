@@ -258,6 +258,7 @@ def run_comprehensive_benchmarks(
 
     def get_or_create_swarm(fleet_size: int) -> Tuple[GroundStationNode, List[DroneNode]]:
         if fleet_size not in swarm_cache:
+            print(f"[*] Bootstrapping swarm (n={fleet_size}): provisioning 1 Ground Station + {fleet_size} Falcon-512 drone identities (one-time bootup)...", flush=True)
             reg = TrustRegistry()
             gs_node = GroundStationNode()
             reg.set_gs_public_key(gs_node.public_key)
@@ -272,6 +273,7 @@ def run_comprehensive_benchmarks(
                 reg.register_drone(d.drone_id, d.public_key)
                 drone_list.append(d)
             swarm_cache[fleet_size] = (gs_node, drone_list)
+            print(f"[+] Provisioning complete for n={fleet_size}. Keys cached for all configurations.\n", flush=True)
         return swarm_cache[fleet_size]
 
     for idx, (n, p_name, ka, ks, loss_rate) in enumerate(test_matrix, 1):
