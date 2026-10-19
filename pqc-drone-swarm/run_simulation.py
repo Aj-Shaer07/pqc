@@ -532,11 +532,11 @@ def main():
     if args.loss is not None:
         loss_rates = [args.loss]
     elif args.all_loss:
-        loss_rates = [0.0, 0.05, 0.10, 0.20, 0.30]
+        loss_rates = [0.0, 0.05, 0.10, 0.15, 0.20, 0.30]
     elif args.quick:
         loss_rates = [0.0, 0.10, 0.20]
     else:
-        loss_rates = [0.0, 0.10, 0.20]
+        loss_rates = [0.0, 0.05, 0.10, 0.15, 0.20]
 
     # Resolve swarm scales
     if args.single:

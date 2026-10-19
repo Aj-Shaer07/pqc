@@ -145,7 +145,7 @@ case "$CMD" in
             if [ -n "$TARGET_N" ] && [ -n "$TARGET_KA" ] && [ -n "$TARGET_KS" ]; then
                 EXTRA_ARGS+=(--single -n "$TARGET_N" --ka "$TARGET_KA" --ks "$TARGET_KS")
             elif [ -n "$TARGET_N" ]; then
-                EXTRA_ARGS+=(-n "$TARGET_N")
+                EXTRA_ARGS+=(--scales "$TARGET_N")
             fi
 
             if [ -n "$TARGET_LOSS" ]; then
