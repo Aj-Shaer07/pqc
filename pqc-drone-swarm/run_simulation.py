@@ -277,6 +277,9 @@ def run_comprehensive_benchmarks(
         return swarm_cache[fleet_size]
 
     for idx, (n, p_name, ka, ks, loss_rate) in enumerate(test_matrix, 1):
+        # Ensure swarm keys for scale n are provisioned before printing the test line
+        gs_cached, drones_cached = get_or_create_swarm(n)
+
         loss_pct_str = f"{int(loss_rate * 100)}%"
         print(f"  [{idx:02d}/{total_configs:02d}] Testing n={n:02d} | {p_name:<32} (ka={ka:02d}, ks={ks:02d}) | Loss={loss_pct_str:>3}... ", end="", flush=True)
 
@@ -291,8 +294,6 @@ def run_comprehensive_benchmarks(
         wire_app = 0
         wire_share = 0
         wire_total = 0
-
-        gs_cached, drones_cached = get_or_create_swarm(n)
 
         for r in range(num_runs):
             # Realistic radio jitter between 5ms and 35ms
