@@ -34,6 +34,7 @@ class DroneNode:
         approval_threshold: Optional[int] = None,
         reconstruct_threshold: Optional[int] = None,
         keypair: Optional[Tuple[bytes, bytes]] = None,
+        geofence_bounds: Optional[Dict[str, float]] = None,
     ):
         self.drone_id = drone_id
         self.share = share  # (x, y)
@@ -46,6 +47,7 @@ class DroneNode:
         self.signer = signer or FalconSigner(512)
         self.anti_replay = anti_replay or AntiReplayFilter(window_seconds=freshness_window_sec)
         self.mesh_key = mesh_key
+        self.geofence_bounds = geofence_bounds
         self._state_lock = threading.RLock()
 
         if keypair is not None:
@@ -73,13 +75,62 @@ class DroneNode:
         self.command_metrics: Dict[str, Dict[str, Any]] = {}
         self.last_rejection_reason: Optional[str] = None
 
+    def validate_geofence(self, data: Any) -> Tuple[bool, str]:
+        """
+        Validate operational coordinates against local autonomous geofence bounds.
+        Returns (is_valid, reason).
+        """
+        if not self.geofence_bounds or not isinstance(data, dict):
+            return True, "No geofence constraints"
+
+        lat_min = self.geofence_bounds.get("lat_min", self.geofence_bounds.get("min_lat", -90.0))
+        lat_max = self.geofence_bounds.get("lat_max", self.geofence_bounds.get("max_lat", 90.0))
+        lon_min = self.geofence_bounds.get("lon_min", self.geofence_bounds.get("min_lon", -180.0))
+        lon_max = self.geofence_bounds.get("lon_max", self.geofence_bounds.get("max_lon", 180.0))
+        alt_max = self.geofence_bounds.get("alt_max_m", self.geofence_bounds.get("max_alt_m", self.geofence_bounds.get("alt_max", 1000.0)))
+
+        coords_to_check = []
+        lat = data.get("lat", data.get("latitude"))
+        lon = data.get("lon", data.get("longitude"))
+        alt = data.get("alt_m", data.get("altitude_m", data.get("alt", 0.0)))
+
+        if lat is not None and lon is not None:
+            coords_to_check.append((float(lat), float(lon), float(alt)))
+
+        waypoints = data.get("waypoints", [])
+        if isinstance(waypoints, list):
+            for wp in waypoints:
+                if isinstance(wp, dict):
+                    w_lat = wp.get("lat", wp.get("latitude"))
+                    w_lon = wp.get("lon", wp.get("longitude"))
+                    w_alt = wp.get("alt_m", wp.get("altitude_m", 0.0))
+                    if w_lat is not None and w_lon is not None:
+                        coords_to_check.append((float(w_lat), float(w_lon), float(w_alt)))
+                elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
+                    w_alt = float(wp[2]) if len(wp) >= 3 else 0.0
+                    coords_to_check.append((float(wp[0]), float(wp[1]), w_alt))
+
+        if not coords_to_check:
+            return True, "No spatial coordinates in payload"
+
+        for c_lat, c_lon, c_alt in coords_to_check:
+            if not (lat_min <= c_lat <= lat_max):
+                return False, f"Geofence violation: Latitude {c_lat:.4f} outside safe boundary [{lat_min}, {lat_max}]"
+            if not (lon_min <= c_lon <= lon_max):
+                return False, f"Geofence violation: Longitude {c_lon:.4f} outside safe boundary [{lon_min}, {lon_max}]"
+            if c_alt > alt_max:
+                return False, f"Geofence violation: Altitude {c_alt:.1f}m exceeds ceiling {alt_max:.1f}m"
+
+        return True, "Coordinates within authorized geofence"
+
     def verify_gs_command(
         self,
         command: CommandMessage,
         current_time: Optional[float] = None,
     ) -> Tuple[bool, float]:
         """
-        Verify the Ground Station signature on an incoming command with anti-replay checks.
+        Verify the Ground Station signature on an incoming command with anti-replay checks,
+        multi-operator threshold authorization, and autonomous geofence validation.
         Returns (is_valid, elapsed_seconds).
         """
         start = time.perf_counter()
@@ -94,45 +145,89 @@ class DroneNode:
             elapsed = time.perf_counter() - start
             return False, elapsed
 
-        # 2. Check Ground Station Public Key
-        if not self.trust_registry.gs_public_key:
-            self.last_rejection_reason = "No GS public key in trust registry"
-            elapsed = time.perf_counter() - start
-            return False, elapsed
+        # 2. Check Signatures: Multi-Operator vs Single-Operator
+        is_valid = False
+        rejection_reason = None
 
-        gs_pk = self.trust_registry.gs_public_key
-        sig_bytes = bytes.fromhex(command.gs_signature_hex)
+        if command.gs_signatures:
+            min_required = self.trust_registry.min_gs_signatures
+            valid_operators = set()
+            for op_id, sig_hex in command.gs_signatures:
+                op_pk = self.trust_registry.get_gs_operator_key(op_id)
+                if not op_pk:
+                    continue
+                try:
+                    s_bytes = bytes.fromhex(sig_hex)
+                    if self.signer.verify(op_pk, command.digest(), s_bytes):
+                        valid_operators.add(op_id)
+                except Exception:
+                    pass
 
-        # 3. Falcon-512 Signature verification
-        is_valid = self.signer.verify(gs_pk, command.digest(), sig_bytes)
+            if len(valid_operators) >= min_required:
+                is_valid = True
+            else:
+                rejection_reason = f"Insufficient GS operator signatures: {len(valid_operators)}/{min_required} verified"
+        else:
+            if not self.trust_registry.gs_public_key:
+                self.last_rejection_reason = "No GS public key in trust registry"
+                elapsed = time.perf_counter() - start
+                return False, elapsed
+
+            if self.trust_registry.min_gs_signatures > 1:
+                self.last_rejection_reason = (
+                    f"Multi-operator authorization required ({self.trust_registry.min_gs_signatures} operators), "
+                    "but command only has a single signature"
+                )
+                elapsed = time.perf_counter() - start
+                return False, elapsed
+
+            gs_pk = self.trust_registry.gs_public_key
+            sig_bytes = bytes.fromhex(command.gs_signature_hex)
+            is_valid = self.signer.verify(gs_pk, command.digest(), sig_bytes)
+            if not is_valid:
+                rejection_reason = "Invalid Ground Station digital signature"
+
         elapsed = time.perf_counter() - start
 
-        if is_valid:
-            self.anti_replay.record_seen(cmd_identifier, command.timestamp, current_time=current_time)
-            self.last_rejection_reason = None
-            self.known_commands[command.command_id] = command
-            if command.command_id not in self.peer_approvals:
-                self.peer_approvals[command.command_id] = set()
-            if command.command_id not in self.collected_shares:
-                self.collected_shares[command.command_id] = []
+        if not is_valid:
+            self.last_rejection_reason = rejection_reason or "Signature verification failed"
+            return False, elapsed
 
-            # Initialize command performance metrics
-            self.command_metrics[command.command_id] = {
-                "command_id": command.command_id,
-                "drone_id": self.drone_id,
-                "command_timestamp": command.timestamp,
-                "received_timestamp": time.time(),
-                "gs_verify_time_ms": round(elapsed * 1000, 3),
-                "approval_create_time_ms": 0.0,
-                "peer_verify_times_ms": [],
-                "reconstruct_time_ms": 0.0,
-                "decrypt_time_ms": 0.0,
-                "total_consensus_time_ms": 0.0,
-            }
-        else:
-            self.last_rejection_reason = "Invalid Falcon-512 GS signature"
+        # 3. Pre-Voting Geofence Inspection on AAD Manifest (if present)
+        if command.aad_hex:
+            try:
+                aad_bytes = bytes.fromhex(command.aad_hex)
+                aad_data = json.loads(aad_bytes.decode("utf-8"))
+                if isinstance(aad_data, dict):
+                    geo_ok, geo_reason = self.validate_geofence(aad_data)
+                    if not geo_ok:
+                        self.last_rejection_reason = geo_reason
+                        return False, elapsed
+            except Exception:
+                pass
 
-        return is_valid, elapsed
+        self.anti_replay.record_seen(cmd_identifier, command.timestamp, current_time=current_time)
+        self.last_rejection_reason = None
+        self.known_commands[command.command_id] = command
+        if command.command_id not in self.peer_approvals:
+            self.peer_approvals[command.command_id] = set()
+        if command.command_id not in self.collected_shares:
+            self.collected_shares[command.command_id] = []
+
+        # Initialize command performance metrics
+        self.command_metrics[command.command_id] = {
+            "command_id": command.command_id,
+            "drone_id": self.drone_id,
+            "command_timestamp": command.timestamp,
+            "received_timestamp": time.time(),
+            "gs_verify_time_ms": round(elapsed * 1000, 3),
+            "approval_create_time_ms": 0.0,
+            "peer_verify_times_ms": [],
+            "reconstruct_time_ms": 0.0,
+            "decrypt_time_ms": 0.0,
+            "total_consensus_time_ms": 0.0,
+        }
+        return True, elapsed
 
     def create_approval(self, command_id: str) -> Tuple[ApprovalMessage, float]:
         """
@@ -391,6 +486,12 @@ class DroneNode:
         try:
             payload = decrypt_payload(mission_key, nonce, ciphertext, aad=aad)
             decrypt_elapsed = time.perf_counter() - decrypt_start
+
+            # Autonomous safety policy: validate geofence on decrypted mission payload
+            geo_ok, geo_reason = self.validate_geofence(payload)
+            if not geo_ok:
+                self.last_rejection_reason = f"Execution aborted: {geo_reason}"
+                return None
 
             # Calculate end-to-end consensus time
             exec_time = time.time()

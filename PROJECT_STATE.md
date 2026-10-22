@@ -153,14 +153,17 @@ To ensure strict mathematical and architectural uniformity across all documentat
   - [x] Hardware constraint scaling across microprocessor profiles (Raspberry Pi Zero, Pi 4, Jetson Nano).
   - [x] Red-Team adversarial attack resilience battery scorecard (50/50 attacks neutralized, 100% containment).
   - [x] All 18 high-resolution figures stored in `paper/result/`.
-- [ ] **Dynamic Swarm Membership, Churn & Fail-Safe Handling**:
-  - [ ] Trust registry revocation lists broadcast over `swarm/registry`.
-  - [ ] Dynamic onboarding of replacement drones with fresh shares without altering the master mission key ($K_{\text{mission}}$).
-  - [ ] Swarm fault tolerance testing (active drones $\ge k_a \ge k_s \implies$ mission proceeds).
-  - [ ] Autonomous Return-to-Launch (RTL) fail-safe trigger when active drones $< k_a$ (authorization quorum lost) or $< k_s$ (reconstruction impossible).
-- [ ] **Rogue Ground Station Defense (Autonomous Safety)**:
-  - [ ] Autonomous safety policies & geofence checks (drones reject out-of-boundary commands even if signed by GS).
-  - [ ] Multi-operator signature verification (require $m$-of-$n_{\text{gs}}$ Ground Station operator signatures).
+- [x] **Rogue Ground Station Defense & Autonomous Safety Policies (Part 1 Completed)**:
+  - [x] Autonomous safety policies & geofence checks (drones inspect signed AAD manifests before voting, dropping out-of-boundary commands).
+  - [x] Multi-operator signature verification (enforces $m$-of-$n_{\text{gs}}$ signatures; evaluated against 1-of-3 sub-quorum, duplicate replay double-signing, hybrid forgery, and corrupted in-transit signatures).
+  - [x] Empirical verification via unit tests (`test_swarm.py`), live Docker commands (`./docker_commands.sh attack geofence` and `attack multi-sig`), and 70-trial Red-Team battery.
+  - [x] Publication figure generated: `paper/result/rogue_gs_and_safety_defense.png` (Airspace Map, CM4/Jetson/PC verification benchmarks, Threat Containment Scorecard).
+- [ ] **Dynamic Swarm Membership, Churn & Fail-Safe Handling (Part 2 Active)**:
+  - [x] Local trust registry revocation infrastructure (`TrustRegistry.revoke_drone()`).
+  - [ ] Live network revocation: signed `RevocationNotice` broadcast over `swarm/registry` dropping captured/rogue nodes.
+  - [ ] Dynamic onboarding of replacement drones: evaluating existing secret polynomial $f(x)$ over $\mathbb{F}_{2^{521}-1}$ at fresh index $x = n_{\text{new}}$ without altering master key ($K_{\text{mission}}$).
+  - [ ] Swarm fault tolerance & heartbeat monitoring: active drones $\ge k_a \ge k_s \implies$ mission proceeds.
+  - [ ] Autonomous Return-to-Launch (RTL) fail-safe trigger when active drones $< k_a$ (authorization quorum lost) or $< k_s$ (reconstruction impossible), zeroizing ephemeral shares.
 
 ---
 

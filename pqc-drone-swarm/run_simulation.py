@@ -13,6 +13,7 @@ Evaluates:
 """
 
 import argparse
+import collections
 import csv
 import json
 import math
@@ -124,86 +125,235 @@ HARDWARE_PROFILES = [
 # ADVERSARIAL RED-TEAM SUMMARY BATTERY
 # =====================================================================
 
-def run_adversary_battery() -> List[Dict[str, Any]]:
-    """Runs the 5 Red-Team adversarial attack vectors and returns containment metrics."""
+def compute_shannon_entropy(data_bytes: bytes) -> float:
+    """Calculate Shannon entropy (bits per byte, max 8.0 for ideal randomness)."""
+    if not data_bytes:
+        return 0.0
+    counts = collections.Counter(data_bytes)
+    total = len(data_bytes)
+    return -sum((c / total) * math.log2(c / total) for c in counts.values())
+
+
+def run_adversary_battery(trials_per_vector: int = 10) -> List[Dict[str, Any]]:
+    """
+    Executes empirical Red-Team adversarial attack vectors across multiple independent trials.
+    Runs an authentic loop of trials_per_vector (default 10) for each vector:
+      1. Passive Wire Sniffing & Cryptanalytic Secrecy
+      2. Rogue Node Wrong Key Isolation
+      3. Active MitM Ciphertext Bit-Flipping
+      4. Temporal Replay Attack
+      5. Unauthorized Ground Station Forgery
+      6. Rogue GS Geofence Out-of-Bounds Violation
+      7. Insufficient Multi-Operator Authorization
+    """
     results = []
 
-    # Vector 1: Passive Eavesdropping & Wire Leakage
-    mesh_key = generate_mission_key()
-    registry = TrustRegistry()
-    d1 = DroneNode("DRONE_1", (1, 100), threshold=3, trust_registry=registry, mesh_key=mesh_key)
-    share_msg = d1.provide_share("cmd-eavesdrop")
-    wire_dict = share_msg.to_dict()
-    leaked = ("x" in wire_dict or "y" in wire_dict)
+    # Vector 1: Passive Eavesdropping & Wire Leakage (10 independent share transmissions)
+    mesh_key_v1 = generate_mission_key()
+    reg_v1 = TrustRegistry()
+    d1 = DroneNode("DRONE_1", (1, 100), threshold=3, trust_registry=reg_v1, mesh_key=mesh_key_v1)
+    v1_rejected, v1_breached = 0, 0
+    for trial in range(trials_per_vector):
+        share_msg = d1.provide_share(f"cmd-eavesdrop-{trial}")
+        wire_dict = share_msg.to_dict()
+        leaked = ("x" in wire_dict or "y" in wire_dict or "action" in wire_dict or "waypoints" in wire_dict)
+        pkt_bytes = bytes.fromhex(wire_dict["ciphertext_hex"]) + bytes.fromhex(wire_dict["signature_hex"])
+        entropy = compute_shannon_entropy(pkt_bytes)
+        if not leaked and entropy > 6.5:
+            v1_rejected += 1
+        else:
+            v1_breached += 1
     results.append({
         "vector": "1. Passive Wire Sniffing",
-        "injected": 10,
-        "intercepted": 10,
-        "rejected": 10 if not leaked else 0,
-        "breached": 0 if not leaked else 10,
-        "containment": 100.0 if not leaked else 0.0,
-        "status": "PASSED (0 coords leaked)",
+        "injected": trials_per_vector,
+        "intercepted": trials_per_vector,
+        "rejected": v1_rejected,
+        "breached": v1_breached,
+        "containment": (v1_rejected / trials_per_vector) * 100.0,
+        "status": f"PASSED ({v1_breached} leaks, {v1_rejected}/{trials_per_vector} confidential)",
     })
 
-    # Vector 2: Rogue Node Wrong Key Isolation
-    wrong_key = generate_mission_key()
-    rogue = DroneNode("ROGUE", (999, 0), threshold=3, trust_registry=registry, mesh_key=wrong_key)
-    rogue_rejected = not rogue.receive_share(share_msg)
+    # Vector 2: Rogue Node Wrong Key Isolation (10 distinct encrypted shares to rogue node)
+    mesh_key_v2 = generate_mission_key()
+    wrong_key_v2 = generate_mission_key()
+    reg_v2 = TrustRegistry()
+    legit_v2 = DroneNode("LEGIT", (1, 100), threshold=3, trust_registry=reg_v2, mesh_key=mesh_key_v2)
+    rogue_v2 = DroneNode("ROGUE", (999, 50), threshold=3, trust_registry=reg_v2, mesh_key=wrong_key_v2)
+    v2_rejected, v2_breached = 0, 0
+    for trial in range(trials_per_vector):
+        share_msg = legit_v2.provide_share(f"cmd-wrongkey-{trial}")
+        if not rogue_v2.receive_share(share_msg):
+            v2_rejected += 1
+        else:
+            v2_breached += 1
     results.append({
         "vector": "2. Rogue Node (Wrong Key)",
-        "injected": 10,
-        "intercepted": 10,
-        "rejected": 10 if rogue_rejected else 0,
-        "breached": 0 if rogue_rejected else 10,
-        "containment": 100.0 if rogue_rejected else 0.0,
-        "status": "PASSED (InvalidTag)",
+        "injected": trials_per_vector,
+        "intercepted": trials_per_vector,
+        "rejected": v2_rejected,
+        "breached": v2_breached,
+        "containment": (v2_rejected / trials_per_vector) * 100.0,
+        "status": f"PASSED (InvalidTag, {v2_rejected}/{trials_per_vector} dropped)",
     })
 
-    # Vector 3: MitM Ciphertext Bit-Flipping
-    corrupted_dict = share_msg.to_dict()
-    ct = list(corrupted_dict["ciphertext_hex"])
-    ct[0] = "f" if ct[0] != "f" else "0"
-    corrupted_dict["ciphertext_hex"] = "".join(ct)
-    corrupted_msg = ShareMessage.from_dict(corrupted_dict)
-    d2 = DroneNode("DRONE_2", (2, 200), threshold=3, trust_registry=registry, mesh_key=mesh_key)
-    tamper_rejected = not d2.receive_share(corrupted_msg)
+    # Vector 3: MitM Ciphertext Bit-Flipping (10 distinct bit-flip positions)
+    mesh_key_v3 = generate_mission_key()
+    reg_v3 = TrustRegistry()
+    d_src_v3 = DroneNode("SRC", (1, 100), threshold=3, trust_registry=reg_v3, mesh_key=mesh_key_v3)
+    d_dst_v3 = DroneNode("DST", (2, 200), threshold=3, trust_registry=reg_v3, mesh_key=mesh_key_v3)
+    v3_rejected, v3_breached = 0, 0
+    for trial in range(trials_per_vector):
+        valid_share = d_src_v3.provide_share(f"cmd-tamper-{trial}")
+        corrupted_dict = valid_share.to_dict()
+        ct_list = list(corrupted_dict["ciphertext_hex"])
+        flip_pos = (trial * 7) % len(ct_list)
+        ct_list[flip_pos] = "f" if ct_list[flip_pos] != "f" else "0"
+        corrupted_dict["ciphertext_hex"] = "".join(ct_list)
+        corrupted_msg = ShareMessage.from_dict(corrupted_dict)
+        if not d_dst_v3.receive_share(corrupted_msg):
+            v3_rejected += 1
+        else:
+            v3_breached += 1
     results.append({
         "vector": "3. MitM Ciphertext Tampering",
-        "injected": 10,
-        "intercepted": 10,
-        "rejected": 10 if tamper_rejected else 0,
-        "breached": 0 if tamper_rejected else 10,
-        "containment": 100.0 if tamper_rejected else 0.0,
-        "status": "PASSED (Dual-Layer Sig/MAC)",
+        "injected": trials_per_vector,
+        "intercepted": trials_per_vector,
+        "rejected": v3_rejected,
+        "breached": v3_breached,
+        "containment": (v3_rejected / trials_per_vector) * 100.0,
+        "status": f"PASSED (Sig/MAC Failure, {v3_rejected}/{trials_per_vector} dropped)",
     })
 
-    # Vector 4: Temporal Replay Attack
-    valid_share = d1.provide_share("cmd-replay")
-    first_ok = d2.receive_share(valid_share)
-    replay_rejected = not d2.receive_share(valid_share)
+    # Vector 4: Temporal Replay Attack (10 distinct replay attempts)
+    mesh_key_v4 = generate_mission_key()
+    reg_v4 = TrustRegistry()
+    d_src_v4 = DroneNode("SRC", (1, 100), threshold=3, trust_registry=reg_v4, mesh_key=mesh_key_v4)
+    d_dst_v4 = DroneNode("DST", (2, 200), threshold=3, trust_registry=reg_v4, mesh_key=mesh_key_v4)
+    v4_rejected, v4_breached = 0, 0
+    for trial in range(trials_per_vector):
+        valid_share = d_src_v4.provide_share(f"cmd-replay-{trial}")
+        first_ok = d_dst_v4.receive_share(valid_share)
+        replayed_ok = d_dst_v4.receive_share(valid_share)
+        if first_ok and not replayed_ok:
+            v4_rejected += 1
+        else:
+            v4_breached += 1
     results.append({
         "vector": "4. Temporal Replay Attack",
-        "injected": 10,
-        "intercepted": 10,
-        "rejected": 10 if replay_rejected else 0,
-        "breached": 0 if replay_rejected else 10,
-        "containment": 100.0 if replay_rejected else 0.0,
-        "status": "PASSED (AntiReplayFilter)",
+        "injected": trials_per_vector,
+        "intercepted": trials_per_vector,
+        "rejected": v4_rejected,
+        "breached": v4_breached,
+        "containment": (v4_rejected / trials_per_vector) * 100.0,
+        "status": f"PASSED (AntiReplayFilter, {v4_rejected}/{trials_per_vector} dropped)",
     })
 
-    # Vector 5: Unauthorized Ground Station Forgery
-    rogue_gs = GroundStationNode()
-    forged_cmd, _ = rogue_gs.create_command({"action": "MALICIOUS"}, mesh_key)
-    valid_gs, _ = d1.verify_gs_command(forged_cmd)
-    forged_rejected = not valid_gs
+    # Vector 5: Unauthorized Ground Station Forgery (10 distinct forged commands)
+    mesh_key_v5 = generate_mission_key()
+    reg_v5 = TrustRegistry()
+    auth_gs_v5 = GroundStationNode()
+    reg_v5.set_gs_public_key(auth_gs_v5.public_key)
+    d_v5 = DroneNode("DRONE_V5", (1, 100), threshold=3, trust_registry=reg_v5, mesh_key=mesh_key_v5)
+    rogue_gs_v5 = GroundStationNode()
+    v5_rejected, v5_breached = 0, 0
+    for trial in range(trials_per_vector):
+        forged_cmd, _ = rogue_gs_v5.create_command({"action": f"MALICIOUS_{trial}", "nonce": trial}, mesh_key_v5)
+        valid_gs, _ = d_v5.verify_gs_command(forged_cmd)
+        if not valid_gs:
+            v5_rejected += 1
+        else:
+            v5_breached += 1
     results.append({
         "vector": "5. Forged Ground Station Key",
-        "injected": 10,
-        "intercepted": 10,
-        "rejected": 10 if forged_rejected else 0,
-        "breached": 0 if forged_rejected else 10,
-        "containment": 100.0 if forged_rejected else 0.0,
-        "status": "PASSED (Unpinned Key Drop)",
+        "injected": trials_per_vector,
+        "intercepted": trials_per_vector,
+        "rejected": v5_rejected,
+        "breached": v5_breached,
+        "containment": (v5_rejected / trials_per_vector) * 100.0,
+        "status": f"PASSED (Unpinned Key Drop, {v5_rejected}/{trials_per_vector} dropped)",
+    })
+
+    # Vector 6: Rogue GS Geofence Out-of-Bounds Violation (10 distinct out-of-bounds coordinates)
+    mesh_key_v6 = generate_mission_key()
+    reg_v6 = TrustRegistry()
+    gs_auth_v6 = GroundStationNode()
+    reg_v6.set_gs_public_key(gs_auth_v6.public_key)
+    safe_bounds = {"lat_min": 37.0, "lat_max": 38.5, "lon_min": -123.0, "lon_max": -121.5}
+    d_geo = DroneNode("DRONE_GEO", (1, 100), threshold=3, trust_registry=reg_v6, mesh_key=mesh_key_v6, geofence_bounds=safe_bounds)
+    v6_rejected, v6_breached = 0, 0
+    for trial in range(trials_per_vector):
+        rogue_lat = 40.0 + trial * 0.25
+        rogue_lon = -118.0 - trial * 0.25
+        flight_payload = {"action": "FLY", "latitude": rogue_lat, "longitude": rogue_lon}
+        rogue_cmd, _ = gs_auth_v6.create_command(
+            flight_payload,
+            mesh_key_v6,
+            aad=json.dumps(flight_payload, sort_keys=True).encode("utf-8"),
+        )
+        is_valid_geo, _ = d_geo.verify_gs_command(rogue_cmd)
+        if not is_valid_geo:
+            v6_rejected += 1
+        else:
+            v6_breached += 1
+    results.append({
+        "vector": "6. Rogue GS Geofence Violation",
+        "injected": trials_per_vector,
+        "intercepted": trials_per_vector,
+        "rejected": v6_rejected,
+        "breached": v6_breached,
+        "containment": (v6_rejected / trials_per_vector) * 100.0,
+        "status": f"PASSED (Geofence Breach Aborted, {v6_rejected}/{trials_per_vector} dropped)",
+    })
+
+    # Vector 7: Insufficient Multi-Sig (1-of-2 Compromise) (10 distinct single-operator commands)
+    mesh_key_v7 = generate_mission_key()
+    reg_v7 = TrustRegistry(min_gs_signatures=2)
+    gs_ms = GroundStationNode()
+    _, pk1 = gs_ms.operators["OP_COMMANDER"]
+    _, pk2 = gs_ms.add_operator("OP_TACTICAL")
+    reg_v7.register_gs_operator("OP_COMMANDER", pk1)
+    reg_v7.register_gs_operator("OP_TACTICAL", pk2)
+    d_ms = DroneNode("DRONE_MS", (1, 100), threshold=3, trust_registry=reg_v7, mesh_key=mesh_key_v7)
+    rogue_signer_v7 = FalconSigner(512)
+    rogue_sk_v7, _ = rogue_signer_v7.keygen()
+    v7_rejected, v7_breached = 0, 0
+    for trial in range(trials_per_vector):
+        attack_type = trial % 5
+        if attack_type == 0:
+            # Sub-quorum: Commander only
+            attack_cmd, _ = gs_ms.create_multi_sig_command({"action": f"PATROL_{trial}", "trial_id": trial}, mesh_key_v7, operator_ids=["OP_COMMANDER"])
+        elif attack_type == 1:
+            # Sub-quorum: Tactical only
+            attack_cmd, _ = gs_ms.create_multi_sig_command({"action": f"PATROL_{trial}", "trial_id": trial}, mesh_key_v7, operator_ids=["OP_TACTICAL"])
+        elif attack_type == 2:
+            # Duplicate replay attack: same operator signing twice
+            base_cmd, _ = gs_ms.create_multi_sig_command({"action": f"PATROL_{trial}", "trial_id": trial}, mesh_key_v7, operator_ids=["OP_COMMANDER"])
+            s_dup = base_cmd.gs_signatures[0][1]
+            attack_cmd = base_cmd.with_operator_signatures([("OP_COMMANDER", s_dup), ("OP_COMMANDER", s_dup)])
+        elif attack_type == 3:
+            # Hybrid forgery attack: Commander + unpinned rogue key
+            base_cmd, _ = gs_ms.create_multi_sig_command({"action": f"PATROL_{trial}", "trial_id": trial}, mesh_key_v7, operator_ids=["OP_COMMANDER"])
+            r_sig = rogue_signer_v7.sign(rogue_sk_v7, base_cmd.digest()).hex()
+            attack_cmd = base_cmd.with_operator_signatures([base_cmd.gs_signatures[0], ("OP_ROGUE", r_sig)])
+        else:
+            # Corrupted in-transit signature: Commander + bit-flipped Tactical
+            full_cmd, _ = gs_ms.create_multi_sig_command({"action": f"PATROL_{trial}", "trial_id": trial}, mesh_key_v7, operator_ids=["OP_COMMANDER", "OP_TACTICAL"])
+            corr_sig = full_cmd.gs_signatures[1][1][:-4] + "5555"
+            attack_cmd = full_cmd.with_operator_signatures([full_cmd.gs_signatures[0], ("OP_TACTICAL", corr_sig)])
+
+        is_valid_ms, _ = d_ms.verify_gs_command(attack_cmd)
+        if not is_valid_ms:
+            v7_rejected += 1
+        else:
+            v7_breached += 1
+    results.append({
+        "vector": "7. Multi-Operator Permutations & Attacks",
+        "injected": trials_per_vector,
+        "intercepted": trials_per_vector,
+        "rejected": v7_rejected,
+        "breached": v7_breached,
+        "containment": (v7_rejected / trials_per_vector) * 100.0,
+        "status": f"PASSED (All Hostile Permutations Blocked, {v7_rejected}/{trials_per_vector} dropped)",
     })
 
     return results

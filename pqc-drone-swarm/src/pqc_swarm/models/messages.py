@@ -3,7 +3,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,7 @@ class CommandMessage:
     aad_hex: str
     ciphertext_hex: str
     gs_signature_hex: str = ""
+    gs_signatures: Optional[Tuple[Tuple[str, str], ...]] = None  # Tuple of (operator_id, signature_hex)
 
     def canonical_signing_bytes(self) -> bytes:
         """Deterministic canonical representation for Falcon signing/verification."""
@@ -32,7 +33,7 @@ class CommandMessage:
         return hashlib.sha256(self.canonical_signing_bytes()).digest()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "command_id": self.command_id,
             "timestamp": self.timestamp,
             "nonce_hex": self.nonce_hex,
@@ -40,9 +41,22 @@ class CommandMessage:
             "ciphertext_hex": self.ciphertext_hex,
             "gs_signature_hex": self.gs_signature_hex,
         }
+        if self.gs_signatures:
+            d["gs_signatures"] = [
+                {"operator_id": op, "signature_hex": sig}
+                for op, sig in self.gs_signatures
+            ]
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CommandMessage":
+        raw_sigs = data.get("gs_signatures")
+        parsed_sigs = None
+        if raw_sigs:
+            parsed_sigs = tuple(
+                (item["operator_id"], item["signature_hex"])
+                for item in raw_sigs
+            )
         return cls(
             command_id=data["command_id"],
             timestamp=float(data["timestamp"]),
@@ -50,6 +64,7 @@ class CommandMessage:
             aad_hex=data["aad_hex"],
             ciphertext_hex=data["ciphertext_hex"],
             gs_signature_hex=data.get("gs_signature_hex", ""),
+            gs_signatures=parsed_sigs,
         )
 
     def with_signature(self, signature_bytes: bytes) -> "CommandMessage":
@@ -60,6 +75,21 @@ class CommandMessage:
             aad_hex=self.aad_hex,
             ciphertext_hex=self.ciphertext_hex,
             gs_signature_hex=signature_bytes.hex(),
+            gs_signatures=self.gs_signatures,
+        )
+
+    def with_operator_signatures(self, signatures: List[Tuple[str, bytes]]) -> "CommandMessage":
+        """Attach multiple operator signatures to the command message."""
+        sigs_tuple = tuple((op_id, sig_bytes.hex()) for op_id, sig_bytes in signatures)
+        primary_sig = signatures[0][1].hex() if signatures else self.gs_signature_hex
+        return CommandMessage(
+            command_id=self.command_id,
+            timestamp=self.timestamp,
+            nonce_hex=self.nonce_hex,
+            aad_hex=self.aad_hex,
+            ciphertext_hex=self.ciphertext_hex,
+            gs_signature_hex=primary_sig,
+            gs_signatures=sigs_tuple,
         )
 
 

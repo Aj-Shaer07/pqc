@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -479,6 +480,221 @@ class TestPQCDroneSwarm(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             transport.publish("pqc/swarm/test", oversized_data)
         self.assertIn("exceeds maximum wire limit", str(ctx.exception))
+
+    def test_geofence_policy_enforcement(self):
+        """Verify that drones enforce autonomous geofence constraints and reject out-of-boundary commands."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        registry.set_gs_public_key(gs.public_key)
+
+        mesh_key = generate_mission_key()
+        mission_key = generate_mission_key()
+        mission_int = int.from_bytes(mission_key, "big")
+        shares = generate_shares(mission_int, threshold=2, num_shares=3)
+
+        geofence = {
+            "lat_min": 34.0, "lat_max": 36.0,
+            "lon_min": 77.0, "lon_max": 79.0,
+            "alt_max_m": 150.0,
+        }
+        drone = DroneNode("DRONE_GEO", shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key, geofence_bounds=geofence)
+        registry.register_drone(drone.drone_id, drone.public_key)
+
+        # 1. Valid command within geofence
+        valid_plan = {"action": "SURVEILLANCE", "latitude": 35.5, "longitude": 78.5, "altitude_m": 100.0}
+        valid_cmd, _ = gs.create_command(valid_plan, mission_key, aad=json.dumps(valid_plan).encode("utf-8"))
+        is_valid, _ = drone.verify_gs_command(valid_cmd)
+        self.assertTrue(is_valid)
+
+        # 2. Rogue command with out-of-bounds latitude
+        rogue_lat = {"action": "HIJACK", "latitude": 39.5, "longitude": 78.5, "altitude_m": 100.0}
+        rogue_cmd_lat, _ = gs.create_command(rogue_lat, mission_key, aad=json.dumps(rogue_lat).encode("utf-8"))
+        is_valid_lat, _ = drone.verify_gs_command(rogue_cmd_lat)
+        self.assertFalse(is_valid_lat)
+        self.assertIn("Geofence violation", drone.last_rejection_reason)
+
+        # 3. Rogue command with out-of-bounds altitude ceiling
+        rogue_alt = {"action": "HIJACK", "latitude": 35.5, "longitude": 78.5, "altitude_m": 250.0}
+        rogue_cmd_alt, _ = gs.create_command(rogue_alt, mission_key, aad=json.dumps(rogue_alt).encode("utf-8"))
+        is_valid_alt, _ = drone.verify_gs_command(rogue_cmd_alt)
+        self.assertFalse(is_valid_alt)
+        self.assertIn("exceeds ceiling", drone.last_rejection_reason)
+
+    def test_multi_operator_ground_station_authorization(self):
+        """Verify that m-of-n GS operator signatures are strictly enforced by the swarm."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        _, op1_pk = gs.operators["OP_COMMANDER"]
+        _, op2_pk = gs.add_operator("OP_SAFETY")
+
+        registry.register_gs_operator("OP_COMMANDER", op1_pk)
+        registry.register_gs_operator("OP_SAFETY", op2_pk)
+        registry.set_min_gs_signatures(2)
+
+        mesh_key = generate_mission_key()
+        mission_key = generate_mission_key()
+        mission_int = int.from_bytes(mission_key, "big")
+        shares = generate_shares(mission_int, threshold=2, num_shares=3)
+
+        drone = DroneNode("DRONE_MULTISIG", shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+        registry.register_drone(drone.drone_id, drone.public_key)
+
+        # 1. Incomplete signature (only OP_COMMANDER signs, 1-of-2)
+        inc_cmd, _ = gs.create_multi_sig_command({"action": "TACTICAL"}, mission_key, operator_ids=["OP_COMMANDER"])
+        is_valid, _ = drone.verify_gs_command(inc_cmd)
+        self.assertFalse(is_valid)
+        self.assertIn("Insufficient GS operator signatures", drone.last_rejection_reason)
+
+        # 2. Fully authorized multi-sig command (both OP_COMMANDER and OP_SAFETY sign, 2-of-2)
+        full_cmd, _ = gs.create_multi_sig_command({"action": "TACTICAL"}, mission_key, operator_ids=["OP_COMMANDER", "OP_SAFETY"])
+        is_valid_full, _ = drone.verify_gs_command(full_cmd)
+        self.assertTrue(is_valid_full)
+
+    def test_multi_operator_flexible_2_of_3_quorum(self):
+        """Verify flexible fault-tolerant 2-of-3 multi-operator quorum combinations."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        _, op1_pk = gs.operators["OP_COMMANDER"]
+        _, op2_pk = gs.add_operator("OP_SAFETY")
+        _, op3_pk = gs.add_operator("OP_TACTICAL")
+
+        registry.register_gs_operator("OP_COMMANDER", op1_pk)
+        registry.register_gs_operator("OP_SAFETY", op2_pk)
+        registry.register_gs_operator("OP_TACTICAL", op3_pk)
+        registry.set_min_gs_signatures(2)
+
+        mesh_key = generate_mission_key()
+        mission_key = generate_mission_key()
+        shares = generate_shares(int.from_bytes(mission_key, "big"), threshold=2, num_shares=3)
+        drone = DroneNode("DRONE_2_OF_3", shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+
+        # Pair 1: Commander + Safety (2-of-3) -> ACCEPTED
+        cmd1, _ = gs.create_multi_sig_command({"action": "PATROL"}, mission_key, operator_ids=["OP_COMMANDER", "OP_SAFETY"])
+        ok1, _ = drone.verify_gs_command(cmd1)
+        self.assertTrue(ok1)
+
+        # Pair 2: Commander + Tactical (2-of-3) -> ACCEPTED (Fault tolerance: Safety offline)
+        cmd2, _ = gs.create_multi_sig_command({"action": "PATROL"}, mission_key, operator_ids=["OP_COMMANDER", "OP_TACTICAL"])
+        ok2, _ = drone.verify_gs_command(cmd2)
+        self.assertTrue(ok2)
+
+        # Pair 3: Safety + Tactical (2-of-3) -> ACCEPTED (Fault tolerance: Commander offline)
+        cmd3, _ = gs.create_multi_sig_command({"action": "PATROL"}, mission_key, operator_ids=["OP_SAFETY", "OP_TACTICAL"])
+        ok3, _ = drone.verify_gs_command(cmd3)
+        self.assertTrue(ok3)
+
+        # Sub-Quorum: Only Tactical signs (1-of-3) -> REJECTED
+        cmd_sub, _ = gs.create_multi_sig_command({"action": "PATROL"}, mission_key, operator_ids=["OP_TACTICAL"])
+        ok_sub, _ = drone.verify_gs_command(cmd_sub)
+        self.assertFalse(ok_sub)
+        self.assertIn("Insufficient GS operator signatures: 1/2", drone.last_rejection_reason)
+
+    def test_multi_operator_duplicate_replay_attack(self):
+        """Verify that double-signing with the same operator key (duplicate replay) is rejected."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        _, op1_pk = gs.operators["OP_COMMANDER"]
+        _, op2_pk = gs.add_operator("OP_SAFETY")
+
+        registry.register_gs_operator("OP_COMMANDER", op1_pk)
+        registry.register_gs_operator("OP_SAFETY", op2_pk)
+        registry.set_min_gs_signatures(2)
+
+        mesh_key = generate_mission_key()
+        mission_key = generate_mission_key()
+        shares = generate_shares(int.from_bytes(mission_key, "big"), threshold=2, num_shares=3)
+        drone = DroneNode("DRONE_DUP", shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+
+        # Attacker duplicates OP_COMMANDER signature twice in the list to attempt faking 2 signatures
+        base_cmd, _ = gs.create_multi_sig_command({"action": "STRIKE"}, mission_key, operator_ids=["OP_COMMANDER"])
+        sig_dup = base_cmd.gs_signatures[0][1]
+        dup_cmd = base_cmd.with_operator_signatures([
+            ("OP_COMMANDER", sig_dup),
+            ("OP_COMMANDER", sig_dup),
+        ])
+
+        ok, _ = drone.verify_gs_command(dup_cmd)
+        self.assertFalse(ok)
+        self.assertIn("Insufficient GS operator signatures: 1/2", drone.last_rejection_reason)
+
+    def test_multi_operator_hybrid_forgery_attack(self):
+        """Verify that combining 1 valid key with 1 rogue unpinned operator signature is rejected."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        _, op1_pk = gs.operators["OP_COMMANDER"]
+        _, op2_pk = gs.add_operator("OP_SAFETY")
+
+        registry.register_gs_operator("OP_COMMANDER", op1_pk)
+        registry.register_gs_operator("OP_SAFETY", op2_pk)
+        registry.set_min_gs_signatures(2)
+
+        mesh_key = generate_mission_key()
+        mission_key = generate_mission_key()
+        shares = generate_shares(int.from_bytes(mission_key, "big"), threshold=2, num_shares=3)
+        drone = DroneNode("DRONE_FORGE", shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+
+        # Attacker generates an unpinned rogue keypair
+        signer = FalconSigner(512)
+        rogue_sk, _ = signer.keygen()
+
+        base_cmd, _ = gs.create_multi_sig_command({"action": "STRIKE"}, mission_key, operator_ids=["OP_COMMANDER"])
+        rogue_sig = signer.sign(rogue_sk, base_cmd.digest()).hex()
+
+        hybrid_cmd = base_cmd.with_operator_signatures([
+            base_cmd.gs_signatures[0],
+            ("OP_ROGUE_FORGER", rogue_sig),
+        ])
+
+        ok, _ = drone.verify_gs_command(hybrid_cmd)
+        self.assertFalse(ok)
+        self.assertIn("Insufficient GS operator signatures: 1/2", drone.last_rejection_reason)
+
+    def test_multi_operator_corrupted_signature_attack(self):
+        """Verify that in-transit signature tampering / corruption fails verification."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        _, op1_pk = gs.operators["OP_COMMANDER"]
+        _, op2_pk = gs.add_operator("OP_SAFETY")
+
+        registry.register_gs_operator("OP_COMMANDER", op1_pk)
+        registry.register_gs_operator("OP_SAFETY", op2_pk)
+        registry.set_min_gs_signatures(2)
+
+        mesh_key = generate_mission_key()
+        mission_key = generate_mission_key()
+        shares = generate_shares(int.from_bytes(mission_key, "big"), threshold=2, num_shares=3)
+        drone = DroneNode("DRONE_CORRUPT", shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+
+        full_cmd, _ = gs.create_multi_sig_command({"action": "STRIKE"}, mission_key, operator_ids=["OP_COMMANDER", "OP_SAFETY"])
+        # Corrupt the second signature bytes
+        corrupted_sig_hex = full_cmd.gs_signatures[1][1][:-4] + "ffff"
+        tampered_cmd = full_cmd.with_operator_signatures([
+            full_cmd.gs_signatures[0],
+            ("OP_SAFETY", corrupted_sig_hex),
+        ])
+
+        ok, _ = drone.verify_gs_command(tampered_cmd)
+        self.assertFalse(ok)
+        self.assertIn("Insufficient GS operator signatures: 1/2", drone.last_rejection_reason)
+
+    def test_multi_operator_empty_signatures_attack(self):
+        """Verify that commands with zero operator signatures are rejected."""
+        registry = TrustRegistry()
+        gs = GroundStationNode()
+        _, op1_pk = gs.operators["OP_COMMANDER"]
+        registry.register_gs_operator("OP_COMMANDER", op1_pk)
+        registry.set_min_gs_signatures(2)
+
+        mesh_key = generate_mission_key()
+        mission_key = generate_mission_key()
+        shares = generate_shares(int.from_bytes(mission_key, "big"), threshold=2, num_shares=3)
+        drone = DroneNode("DRONE_EMPTY", shares[0], threshold=2, trust_registry=registry, mesh_key=mesh_key)
+
+        base_cmd, _ = gs.create_multi_sig_command({"action": "STRIKE"}, mission_key, operator_ids=["OP_COMMANDER"])
+        empty_cmd = base_cmd.with_operator_signatures([])
+
+        ok, _ = drone.verify_gs_command(empty_cmd)
+        self.assertFalse(ok)
 
 
 if __name__ == "__main__":

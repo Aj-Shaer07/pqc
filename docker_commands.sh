@@ -33,10 +33,11 @@ show_help() {
     echo "  sim-all                Run full paper benchmarks (all configs, k/n)"
     echo "  up [N] [MEM] [CPUS]    Start multi-container swarm with N drones"
     echo "                         (Defaults: N=$DEFAULT_DRONES, MEM=$DEFAULT_MEMORY, CPUS=$DEFAULT_CPUS)"
-    echo "  attack [demo|eavesdrop|tamper|wrong-key|replay|rogue-gs] [DUR] [TARGET]"
+    echo "  attack [demo|eavesdrop|tamper|wrong-key|replay|rogue-gs|geofence|multi-sig] [DUR] [TARGET]"
     echo "                         Run Red-Team attack battery against the swarm (defaults: demo)"
     echo "  down                   Stop and remove all swarm containers & network"
     echo "  logs                   Follow real-time logs from all swarm nodes"
+    echo "  plot                   Generate all publication-quality comparison and safety defense plots"
     echo ""
     echo "Examples:"
     echo "  ./docker_commands.sh simulate            # Full evaluation matrix (Tables 1, 2, 3, all profiles & loss)"
@@ -46,7 +47,10 @@ show_help() {
     echo "  ./docker_commands.sh cluster-sweep 10    # Live container benchmark for n=10"
     echo "  ./docker_commands.sh build"
     echo "  ./docker_commands.sh test"
-    echo "  ./docker_commands.sh attack demo         # In-memory security validation battery"
+    echo "  ./docker_commands.sh plot                # Generate all 19 publication-quality plots in paper/result/"
+    echo "  ./docker_commands.sh attack demo         # In-memory security validation battery (all 7 vectors)"
+    echo "  ./docker_commands.sh attack geofence 15  # Rogue GS out-of-boundary flight command injection"
+    echo "  ./docker_commands.sh attack multi-sig 15 # Multi-operator threshold authorization (1-of-2 vs 2-of-2)"
     echo "  ./docker_commands.sh attack eavesdrop 30 # Sniff MQTT traffic on running cluster"
     echo "  ./docker_commands.sh attack tamper 30 all# Active MitM ciphertext injection"
     echo "  ./docker_commands.sh attack wrong-key 30 # Rogue container with invalid key"
@@ -408,6 +412,16 @@ sys.exit(1)
 
     logs)
         docker compose logs -f
+        ;;
+
+    plot)
+        echo "[*] Generating all publication-quality benchmark plots..."
+        if [ -f "$PWD/venv/bin/python3" ]; then
+            "$PWD/venv/bin/python3" "$PWD/plot_comparison.py"
+        else
+            python3 "$PWD/plot_comparison.py"
+        fi
+        echo "[+] Plots generated in $PWD/paper/result/"
         ;;
 
     help|*)

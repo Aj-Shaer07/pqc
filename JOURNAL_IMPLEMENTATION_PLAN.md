@@ -579,3 +579,46 @@ Evaluating all 5 loss rates ($p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.15, 0.20\
 - **Dual-Threshold Balanced ($k_a = 0.70n, k_s = 0.40n$):** Delivers optimal balance, retaining >90% success under 10% packet loss while enforcing strict 70% peer authorization.
 - **Legacy Baseline ($k_a = k_s = 0.70n$):** Suffers catastrophic consensus collapse as packet loss reaches 15%–20% (success drops to **0%**), mathematically validating the necessity of decoupled dual thresholds in tactical wireless environments.
 
+---
+
+### 7.6 Rogue Ground Station Mitigation & Swarm Safety Policy Defense
+*(Artifact: `paper/result/rogue_gs_and_safety_defense.png`)*
+
+To eliminate single-operator vulnerability and rogue ground station hijackings, the protocol incorporates:
+1. **Autonomous Geofence & Boundary Enforcement:**
+   - Drones store a hardware-pinned operational boundary envelope $[lat_{\min}, lat_{\max}] \times [lon_{\min}, lon_{\max}]$ and maximum altitude ceiling ($alt \le 120\text{ m AGL}$).
+   - Ground Station binds flight waypoints into unencrypted Associated Authenticated Data (AAD) signed by Falcon-512.
+   - Drones inspect the signed AAD **prior to consensus voting**. If waypoints breach the envelope, drones abort pre-voting ingress, zeroize ephemeral memory, and emit `GEOFENCE_VIOLATION` alerts over `swarm/telemetry` (100% containment across 10 trials).
+2. **Multi-Operator $m$-of-$n_{\text{gs}}$ Quorum Authorization:**
+   - Eliminates single-operator compromise by requiring $m$ distinct Falcon-512 signatures from authorized operator public keys pinned in `TrustRegistry`.
+   - **Combinations Evaluated:**
+     - **2-of-2 Strict Dual-Key:** Commander + Safety Officer -> Authorized.
+     - **2-of-3 Fault-Tolerant Majority:** Any 2 of (Commander, Safety, Tactical Lead) -> Authorized even if 1 operator workstation is offline or jammed.
+     - **Sub-Quorum (1-of-3):** Rejected ($1 < 2$).
+     - **Duplicate Replay Attack:** Double-signing with identical operator key -> Rejected ($|\text{distinct operators}| = 1 < 2$).
+     - **Hybrid Forgery Attack:** Legitimate key + unpinned rogue key -> Rejected (untrusted key discarded).
+     - **Corrupted In-Transit Signature:** 1 valid key + 1 bit-flipped signature -> Rejected (Falcon-512 verification failure).
+   - **Autopilot Overhead:** Dual Falcon-512 verification requires only **0.156 ms on Raspberry Pi CM4** (< 1.6% of a 100 Hz / 10 ms autopilot flight frame), preserving >98.4% CPU headroom for flight avionics.
+
+---
+
+### 7.7 Part 2: Dynamic Swarm Membership, Churn & Fail-Safe Handling (Active Roadmap)
+
+Addresses battlefield node churn, attrition, and mid-flight fleet adjustments:
+1. **Cryptographic Node Revocation (Captured Node Ejection):**
+   - Ground Station or consensus quorum issues a signed `RevocationNotice` specifying target `drone_id`.
+   - Every active node invokes `TrustRegistry.revoke_drone()`, dropping the target node's public key from the trust table.
+   - All subsequent approvals, shares, or telemetry from that node are rejected at network ingress prior to cryptographic verification.
+2. **Dynamic Replacement Onboarding (Zero Key-Reset):**
+   - When a replacement drone joins mid-mission, the Ground Station evaluates the existing secret Shamir polynomial $f(x)$ over the Mersenne prime field $\mathbb{F}_{2^{521}-1}$ at a fresh index $x = n_{\text{new}}$:
+     $$y_{\text{new}} = f(n_{\text{new}}) \pmod{2^{521} - 1}$$
+   - The share $(n_{\text{new}}, y_{\text{new}})$ is encrypted under the replacement drone's Falcon/AEAD key and transmitted.
+   - The root mission key $K_{\text{mission}} = f(0)$ remains completely unchanged, avoiding network-wide rekeying.
+3. **Autonomous Return-to-Launch (RTL) on Quorum Collapse:**
+   - Companion computers monitor active peer heartbeat acknowledgments.
+   - If active unrevoked node count drops below $n_{\text{active}} < k_a$ (voting quorum impossible) or $n_{\text{active}} < k_s$ (reconstruction impossible), nodes autonomously execute `FAILSAFE_RTL`:
+     - Abort pending mission waypoints.
+     - Zeroize ephemeral in-memory Shamir shares and mission keys.
+     - Broadcast `FAILSAFE_ALERT: QUORUM_COLLAPSE` and initiate safe in-place hover or autonomous RTL.
+
+

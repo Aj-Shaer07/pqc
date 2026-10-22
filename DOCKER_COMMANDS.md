@@ -51,12 +51,15 @@ All operations are automated through the unified controller script:
 | Command | Syntax | Description |
 | :--- | :--- | :--- |
 | **`build`** | `./docker_commands.sh build` | Compiles dependencies and builds the base `pqc-drone-swarm:latest` Docker image. |
-| **`test`** | `./docker_commands.sh test` | Runs the automated 18-test cryptographic, network, and system hardening test battery inside an isolated container. |
-| **`simulate`** | `./docker_commands.sh simulate [OPTIONS]` | Runs complete Phase 3.2 simulation across host CPU cores (Table 1 multi-scale sweep, Table 2 hardware tiers, Table 3 Red-Team attacks) and auto-exports `benchmark_results.csv` and `benchmark_results.json`. |
+| **`test`** | `./docker_commands.sh test` | Runs the automated 24-test cryptographic, network, and multi-operator test battery inside an isolated container. |
+| **`simulate`** | `./docker_commands.sh simulate [OPTIONS]` | Runs complete Phase 3.2 simulation across host CPU cores (Table 1 multi-scale sweep, Table 2 hardware tiers, Table 3 7-vector Red-Team attacks) and auto-exports `benchmark_results.csv` and `benchmark_results.json`. |
 | **`cluster-sweep`** | `./docker_commands.sh cluster-sweep [SCALES] [ROUNDS]` | Runs live multi-container cluster benchmark sweep across scales (n = 10..50) with clean teardown per scale, exporting directly to CSV and JSON. |
 | **`up`** | `./docker_commands.sh up [N] [MEM] [CPUS]` | Spawns the live swarm cluster with 1 Mosquitto Broker, 1 Ground Station, and N Drones with custom CPU/RAM limits. |
 | **`logs`** | `./docker_commands.sh logs` | Streams real-time decentralized consensus logs across all containers. |
-| **`attack`** | `./docker_commands.sh attack [MODE] [DUR] [TARGET]` | Injects Red-Team attack scenarios: `demo`, `eavesdrop`, `wrong-key`, `tamper`, `replay`, or `rogue-gs`. |
+| **`attack`** | `./docker_commands.sh attack [MODE] [DUR] [TARGET]` | Injects Red-Team attack scenarios: `demo`, `eavesdrop`, `wrong-key`, `tamper`, `replay`, `rogue-gs`, `geofence`, or `multi-sig`. |
+| **`attack geofence`** | `./docker_commands.sh attack geofence` | Injects out-of-bounds rogue waypoint commands; asserts drones autonomously reject via pre-voting signed AAD ingress filter. |
+| **`attack multi-sig`** | `./docker_commands.sh attack multi-sig` | Injects full matrix of multi-operator permutations (1-of-3 sub-quorum, duplicate replay, hybrid forgery, corrupted sig, 2-of-3 quorum) into live swarm. |
+| **`plot`** | `./docker_commands.sh plot` | Generates all 19 publication-quality comparative benchmark plots into `paper/result/`. |
 | **`sim-single`** | `./docker_commands.sh sim-single` | Runs a standalone benchmark simulation round (k=3, n=5) inside Docker. |
 | **`sim-all`** | `./docker_commands.sh sim-all [RUNS]` | Runs the full paper benchmark matrix across (3,5), (5,10), (10,20), (25,50). |
 | **`down`** | `./docker_commands.sh down` | Gracefully terminates and removes all containers, networks, and volumes. |
@@ -301,7 +304,60 @@ The empirical testing harness executes six active and passive attack scenarios a
 
 ---
 
-### 3.7 `down` — Swarm Teardown
+#### Mode 7: `attack geofence` — Autonomous Geofence & Boundary Enforcement
+```bash
+./docker_commands.sh attack geofence 20
+```
+- **Execution:** Injects a mission command carrying a valid Ground Station signature but instructing an out-of-bounds tactical waypoint (e.g. Lat 39.50°N, Lon -119.80°W, >210 km away from authorized operational envelope `[37.0°N to 38.5°N, 123.0°W to 121.5°W]`).
+- **Empirical Output:**
+  - Drones inspect unencrypted Associated Authenticated Data (AAD) flight manifest **before generating approval votes**.
+  - `validate_geofence()` detects the boundary violation, drops the command immediately, zeroizes temporary memory, and broadcasts `GEOFENCE_VIOLATION` alerts over `swarm/telemetry`.
+  - Zero approval votes are released, preventing swarm consensus.
+
+---
+
+#### Mode 8: `attack multi-sig` — Multi-Operator Authorization Combinations Scorecard
+```bash
+./docker_commands.sh attack multi-sig 20
+```
+- **Execution:** Injects the full matrix of operational quorums and hostile permutation attacks into live Docker drone containers on `swarm-net`:
+  1. **Sub-Quorum (1-of-3):** Signed only by Commander -> Drones reject (`1 < 2` operators).
+  2. **Duplicate Replay Attack:** Double-signed by Commander twice (`[Commander, Commander]`) -> Drones reject (distinct operator set collapses to 1).
+  3. **Hybrid Forgery Attack:** Signed by Commander + Unregistered Rogue Key -> Drones reject (unpinned key dropped).
+  4. **Corrupted In-Transit Sig:** Signed by Commander + Bit-Flipped Safety -> Drones reject (Falcon verification failure).
+  5. **Dual Quorum (Pair A):** Signed by Commander + Safety -> Drones accept (`2 >= 2`).
+  6. **Flexible Quorum (Pair B):** Signed by Commander + Tactical Lead (Safety offline) -> Drones accept (`2 >= 2`).
+- **Empirical Output:** Prints an interactive live scorecard summarizing all 6 combinations and confirmed telemetry alerts.
+
+---
+
+### 3.7 `plot` — High-Resolution Benchmark Visualization Suite
+```bash
+./docker_commands.sh plot
+```
+- Ingests `benchmark_results.csv`, `cluster_benchmark_results.csv`, and `benchmark_results.json`.
+- Generates all 19 publication-quality comparative figures (DPI 300) directly into `paper/result/`:
+  - `latency_vs_scale_loss_0pct.png` through `20pct.png`
+  - `latency_vs_scale_all_loss_grid.png` (Master 5-Loss Grid)
+  - `packet_loss_resilience_n10.png` through `n50.png`
+  - `packet_loss_all_scales_grid.png` (Master All-Scales Grid)
+  - `crypto_timing_breakdown_comparison.png`
+  - `consensus_latency_decomposition.png`
+  - `hardware_sensitivity_analysis.png`
+  - `adversarial_resilience_analysis.png`
+  - `rogue_gs_and_safety_defense.png` (Tactical Airspace Map, Microprocessor Multi-Sig Overhead, Threat Containment Scorecard)
+
+---
+
+### 3.8 Part 2: Dynamic Swarm Membership & Churn Handling (Under Active Development)
+Covers mid-mission swarm lifecycle management:
+1. **Cryptographic Node Revocation:** Broadcasts signed `RevocationNotice` to eject captured/rogue UAVs; drones drop revoked public keys and ignore future approvals/shares.
+2. **Dynamic Replacement Onboarding (Zero Key-Reset):** Provisions replacement drones mid-flight by evaluating existing secret polynomial $f(x)$ over $2^{521} - 1$ at fresh index $x = n_{\text{new}}$, without rekeying active drones.
+3. **Autonomous Return-to-Launch (RTL) on Quorum Collapse:** Peer heartbeat loop triggers autonomous RTL, zeroizing ephemeral shares when live active drones drop below $k_a$ or $k_s$.
+
+---
+
+### 3.9 `down` — Swarm Teardown
 ```bash
 ./docker_commands.sh down
 ```

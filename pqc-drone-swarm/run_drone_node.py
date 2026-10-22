@@ -64,6 +64,18 @@ def main():
     freshness_window = float(os.getenv("FRESHNESS_WINDOW", "30.0"))
     share_assigned = threading.Event()
 
+    # Autonomous geofence safety boundary
+    lat_min = float(os.getenv("GEOFENCE_LAT_MIN", "34.0"))
+    lat_max = float(os.getenv("GEOFENCE_LAT_MAX", "36.0"))
+    lon_min = float(os.getenv("GEOFENCE_LON_MIN", "77.0"))
+    lon_max = float(os.getenv("GEOFENCE_LON_MAX", "79.0"))
+    alt_max = float(os.getenv("GEOFENCE_ALT_MAX", "150.0"))
+    geofence_bounds = {
+        "lat_min": lat_min, "lat_max": lat_max,
+        "lon_min": lon_min, "lon_max": lon_max,
+        "alt_max_m": alt_max,
+    }
+
     # Initialize Drone with dummy share initially; real share provided via GS registry or derived
     # We assign dynamic share index based on hash or container instance
     node_index = abs(hash(drone_id)) % 1000 + 1
@@ -77,6 +89,7 @@ def main():
         trust_registry=trust_registry,
         mesh_key=mesh_key,
         freshness_window_sec=freshness_window,
+        geofence_bounds=geofence_bounds,
     )
 
     transport = SwarmMQTTTransport(
@@ -92,6 +105,17 @@ def main():
             gs_pk = bytes.fromhex(data["gs_public_key_hex"])
             trust_registry.set_gs_public_key(gs_pk)
             logger.info(f"[{drone_id}] 🔑 Installed Ground Station Public Key.")
+
+        # Multi-operator GS keys
+        if "gs_operators" in data:
+            for op_id, op_pk_hex in data["gs_operators"].items():
+                try:
+                    trust_registry.register_gs_operator(op_id, bytes.fromhex(op_pk_hex))
+                except Exception:
+                    pass
+            min_sigs = int(data.get("min_gs_signatures", 1))
+            trust_registry.set_min_gs_signatures(min_sigs)
+            logger.info(f"[{drone_id}] 🔑 Synchronized {len(data['gs_operators'])} GS operator key(s) (min_required={min_sigs}).")
 
         # Synchronize full cluster peer registry broadcasted by Ground Station
         if "peer_registry" in data:
@@ -150,11 +174,17 @@ def main():
         is_valid, elapsed = drone.verify_gs_command(cmd)
         if not is_valid:
             reason = drone.last_rejection_reason or "Verification failed"
+            alert_type = "COMMAND_REJECTED"
+            if "Geofence" in reason or "geofence" in reason:
+                alert_type = "GEOFENCE_VIOLATION"
+            elif "multi-operator" in reason or "operator signatures" in reason:
+                alert_type = "INCOMPLETE_MULTI_SIG"
+
             logger.warning(f"[{drone_id}] ❌ Command {cmd.command_id} rejected ({reason}). Ignoring.")
             transport.publish(TOPIC_TELEMETRY, {
                 "drone_id": drone_id,
                 "event": "SECURITY_ALERT",
-                "alert_type": "COMMAND_REJECTED",
+                "alert_type": alert_type,
                 "reason": reason,
                 "command_id": cmd.command_id,
                 "timestamp": time.time(),
