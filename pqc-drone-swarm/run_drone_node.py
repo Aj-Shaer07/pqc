@@ -6,6 +6,7 @@ import os
 import secrets
 import signal
 import sys
+import threading
 import time
 from typing import Dict, Any
 
@@ -44,12 +45,14 @@ def main():
     threshold = int(os.getenv("THRESHOLD", "3"))
     approval_threshold = int(os.getenv("SWARM_KA", os.getenv("THRESHOLD", "3")))
     reconstruct_threshold = int(os.getenv("SWARM_KS", os.getenv("THRESHOLD", "3")))
+    packet_loss_rate = float(os.getenv("PACKET_LOSS", "0.0"))
 
     # Extract unique Drone ID from container hostname or env
     hostname = os.getenv("HOSTNAME", "node")[:8]
     drone_id = os.getenv("DRONE_ID", f"DRONE_{hostname}")
 
-    logger.info(f"🚀 Initializing Autonomous Drone Node: {drone_id} (ka={approval_threshold}, ks={reconstruct_threshold})")
+    loss_str = f" | Loss: {int(packet_loss_rate*100)}%" if packet_loss_rate > 0.0 else ""
+    logger.info(f"🚀 Initializing Autonomous Drone Node: {drone_id} (ka={approval_threshold}, ks={reconstruct_threshold}{loss_str})")
 
     trust_registry = TrustRegistry()
     
@@ -57,6 +60,9 @@ def main():
     mesh_key = bytes.fromhex(mesh_key_hex) if mesh_key_hex else None
     if mesh_key:
         logger.info(f"[{drone_id}] 🔐 Swarm Broadcast Mesh Key configured (Wire Confidentiality active).")
+
+    freshness_window = float(os.getenv("FRESHNESS_WINDOW", "30.0"))
+    share_assigned = threading.Event()
 
     # Initialize Drone with dummy share initially; real share provided via GS registry or derived
     # We assign dynamic share index based on hash or container instance
@@ -70,6 +76,7 @@ def main():
         reconstruct_threshold=reconstruct_threshold,
         trust_registry=trust_registry,
         mesh_key=mesh_key,
+        freshness_window_sec=freshness_window,
     )
 
     transport = SwarmMQTTTransport(
@@ -116,6 +123,7 @@ def main():
         if drone_id in assigned_shares:
             x, y = assigned_shares[drone_id]
             drone.share = (int(x), int(y))
+            share_assigned.set()
             logger.info(f"[{drone_id}] 📦 Received assigned Shamir share (x={x})")
 
     # 2. Handle incoming GS command
@@ -134,6 +142,10 @@ def main():
             return
 
         logger.info(f"[{drone_id}] 📩 Received mission command: {cmd.command_id}")
+
+        if packet_loss_rate > 0.0 and (secrets.randbelow(10000) / 10000.0) < packet_loss_rate:
+            logger.info(f"[{drone_id}] 📭 Dropped mission command {cmd.command_id} (simulated RF packet loss: {int(packet_loss_rate*100)}%)")
+            return
 
         is_valid, elapsed = drone.verify_gs_command(cmd)
         if not is_valid:
@@ -175,6 +187,9 @@ def main():
 
         if app.drone_id == drone_id:
             return  # Skip own approval
+
+        if packet_loss_rate > 0.0 and (secrets.randbelow(10000) / 10000.0) < packet_loss_rate:
+            return
 
         logger.info(f"[{drone_id}] 📬 Received peer approval from {app.drone_id} for command {app.command_id}")
         valid, elapsed = drone.process_peer_approval(app)
@@ -219,6 +234,9 @@ def main():
         if share_msg.drone_id == drone_id:
             return
 
+        if packet_loss_rate > 0.0 and (secrets.randbelow(10000) / 10000.0) < packet_loss_rate:
+            return
+
         stored = drone.receive_share(share_msg)
         if stored:
             enc_tag = "🔒 AEAD Encrypted" if share_msg.is_encrypted else "Plaintext"
@@ -261,15 +279,16 @@ def main():
 
     transport.connect()
 
-    # Announce public key to registry with periodic retries during startup
-    logger.info(f"[{drone_id}] 📢 Announcing public key to {TOPIC_REGISTRY}...")
-    for _ in range(3):
+    # Announce public key to registry periodically until assigned share is confirmed by Ground Station
+    logger.info(f"[{drone_id}] 📢 Announcing public key to {TOPIC_REGISTRY} until registered...")
+    announce_start = time.time()
+    while running and not share_assigned.is_set() and (time.time() - announce_start < 180.0):
         transport.publish(TOPIC_REGISTRY, {
             "drone_id": drone_id,
             "public_key_hex": drone.public_key.hex(),
         })
-        time.sleep(1.0)
-    logger.info(f"[{drone_id}] 📢 Broadcasted public key to {TOPIC_REGISTRY}")
+        share_assigned.wait(timeout=2.0)
+    logger.info(f"[{drone_id}] 🤝 Handshake confirmed by Ground Station on {TOPIC_REGISTRY}")
 
     logger.info(f"[{drone_id}] Daemon active and listening for swarm events...")
 

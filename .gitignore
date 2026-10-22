@@ -81,9 +81,14 @@ Thumbs.db
 *.log
 
 # =================================================================
-# Simulation & Benchmark Datasets
+# Generated Benchmark & Paper Visualizations
 # =================================================================
-benchmark_results.csv
-benchmark_results.json
-benchmark_*.csv
-benchmark_*.json
+*.png
+paper/result/*.png
+!system_architecture.png
+
+# =================================================================
+# Temporary & Backup Files
+# =================================================================
+*.bak
+*.pre_group_bak

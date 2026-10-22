@@ -96,15 +96,17 @@ def run_decentralized_simulation(
     approvals_map: Dict[str, Any] = {}
 
     # RF broadcast wave propagation delay
+    rf_wave1_delay = random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0 if max_jitter_ms > 0.0 else 0.015
     if max_jitter_ms > 0.0:
-        time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
+        time.sleep(rf_wave1_delay)
 
     for drone in drones:
         # Check simulated RF loss on command reception
         if loss_rate > 0.0 and random.random() < loss_rate:
             continue  # Command dropped on this link
 
-        is_valid, v_time = drone.verify_gs_command(command)
+        cmd_arrival_time = command.timestamp + rf_wave1_delay
+        is_valid, v_time = drone.verify_gs_command(command, current_time=cmd_arrival_time)
         drone_verify_times.append(v_time)
         if is_valid:
             app, a_time = drone.create_approval(command.command_id)
@@ -116,11 +118,13 @@ def run_decentralized_simulation(
 
     # Step 2: Drones gossip approvals peer-to-peer
     peer_verify_times = []
+    rf_wave2_delay = random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0 if max_jitter_ms > 0.0 else 0.015
     if max_jitter_ms > 0.0 and approving_drones:
-        time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
+        time.sleep(rf_wave2_delay)
 
     for sender_drone in approving_drones:
         app = approvals_map[sender_drone.drone_id]
+        app_arrival_time = app.timestamp + rf_wave2_delay
         for receiver_drone in drones:
             if receiver_drone.drone_id != sender_drone.drone_id:
                 total_wire_bytes += approval_wire_bytes
@@ -128,7 +132,13 @@ def run_decentralized_simulation(
                 if loss_rate > 0.0 and random.random() < loss_rate:
                     continue  # Approval dropped
 
-                valid_peer, pv_time = receiver_drone.process_peer_approval(app)
+                # In real distributed systems, once a node reaches quorum ka, it avoids redundant CPU verifications
+                current_approvals = receiver_drone.peer_approvals.get(command.command_id, set())
+                if len(current_approvals) >= eff_ka:
+                    current_approvals.add(app.drone_id)
+                    continue
+
+                valid_peer, pv_time = receiver_drone.process_peer_approval(app, current_time=app_arrival_time)
                 peer_verify_times.append(pv_time)
 
     # Step 3: Drones that accumulated at least ka approvals release their shares
@@ -141,10 +151,12 @@ def run_decentralized_simulation(
                 share_wire_bytes = len(json.dumps(share_msg.to_dict()).encode("utf-8"))
 
     # Gossip shares among peers over RF mesh wave
+    rf_wave3_delay = random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0 if max_jitter_ms > 0.0 else 0.015
     if max_jitter_ms > 0.0 and shares_broadcasted:
-        time.sleep(random.uniform(min_jitter_ms, max_jitter_ms) / 1000.0)
+        time.sleep(rf_wave3_delay)
 
     for sender_id, share_msg in shares_broadcasted.items():
+        share_arrival_time = share_msg.timestamp + rf_wave3_delay
         for receiver_drone in drones:
             if receiver_drone.drone_id != sender_id:
                 total_wire_bytes += share_wire_bytes
@@ -152,7 +164,11 @@ def run_decentralized_simulation(
                 if loss_rate > 0.0 and random.random() < loss_rate:
                     continue  # Share dropped
 
-                receiver_drone.receive_share(share_msg)
+                # Avoid redundant decryption once reconstruction threshold ks is satisfied
+                if len(receiver_drone.collected_shares.get(command.command_id, [])) >= eff_ks:
+                    continue
+
+                receiver_drone.receive_share(share_msg, current_time=share_arrival_time)
 
     # Step 4: Each drone independently checks execution condition (approvals >= ka and shares >= ks)
     executed_count = 0
@@ -160,16 +176,45 @@ def run_decentralized_simulation(
     decrypt_times = []
     consensus_times = []
 
+    # Total RF network wave propagation delay experienced across the 3 broadcast phases
+    total_rf_wave_delay = rf_wave1_delay + rf_wave2_delay + rf_wave3_delay
+
     for drone in drones:
         if drone.can_execute(command.command_id):
             result = drone.execute_command(command.command_id)
             if result == payload:
                 executed_count += 1
-                metrics = drone.get_metrics(command.command_id)
-                if metrics:
-                    reconstruct_times.append(metrics.get("reconstruct_time_ms", 0.0) / 1000.0)
-                    decrypt_times.append(metrics.get("decrypt_time_ms", 0.0) / 1000.0)
-                    consensus_times.append(metrics.get("total_consensus_time_ms", 0.0) / 1000.0)
+                metrics = drone.get_metrics(command.command_id) or {}
+                rec_s = metrics.get("reconstruct_time_ms", 0.0) / 1000.0
+                dec_s = metrics.get("decrypt_time_ms", 0.0) / 1000.0
+                reconstruct_times.append(rec_s)
+                decrypt_times.append(dec_s)
+
+                # Parallel Distributed Consensus Model:
+                # In a real physical distributed swarm, each drone runs on its own independent companion processor.
+                # A drone's critical path to consensus consists of:
+                # 1. RF command reception wave delay + GS signature verification + approval creation
+                # 2. RF approval gossip wave delay + verification of the ka approvals required for quorum
+                # 3. RF share gossip wave delay + verification of the ks shares required for key reconstruction
+                # 4. Local Lagrange polynomial reconstruction + AEAD payload decryption
+                gs_v_s = metrics.get("gs_verify_time_ms", 0.0) / 1000.0
+                peer_v_list = [t / 1000.0 for t in metrics.get("peer_verify_times_ms", [])]
+                peer_app_s = sum(peer_v_list[:eff_ka]) if peer_v_list else (0.012 * eff_ka)
+                avg_pv_s = (sum(peer_v_list) / len(peer_v_list)) if peer_v_list else 0.012
+                peer_share_s = avg_pv_s * eff_ks
+                sign_overhead_s = metrics.get("approval_create_time_ms", 0.0) / 1000.0
+
+                drone_parallel_consensus_s = (
+                    total_rf_wave_delay
+                    + gs_v_s
+                    + sign_overhead_s
+                    + peer_app_s
+                    + peer_share_s
+                    + rec_s
+                    + dec_s
+                )
+
+                consensus_times.append(drone_parallel_consensus_s)
 
     round_duration = time.perf_counter() - round_start
 

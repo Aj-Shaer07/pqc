@@ -13,18 +13,29 @@ A decentralized, post-quantum threshold cryptography framework for autonomous dr
 ## Repository Structure
 
 ```text
-├── falcon_py/               # Falcon-512 Python implementation (vendored from tprest/falcon.py)
-├── pqc-drone-swarm/         # Core swarm package & benchmarking suite
-│   ├── pyproject.toml       # Swarm package manifest
-│   ├── run_simulation.py    # Multi-configuration benchmark runner (CLI)
-│   ├── src/pqc_swarm/       # Modular library
-│   │   ├── crypto/          # FalconSigner, SSS, and AEAD modules
-│   │   ├── models/          # Command, Approval, Share dataclasses, TrustRegistry
-│   │   ├── nodes/           # DroneNode and GroundStationNode
-│   │   └── sim/             # Decentralized simulation harness
-│   ├── tests/               # Automated unit tests
-│   └── notebooks/           # Research notebooks & legacy exploration
-└── system_architecture.png  # High-level protocol diagram
+├── falcon_py/                   # Falcon-512 Python implementation (vendored from tprest/falcon.py)
+├── pqc-drone-swarm/             # Core swarm package & benchmarking suite
+│   ├── pyproject.toml           # Swarm package manifest
+│   ├── run_simulation.py        # Multi-configuration parallel simulation benchmark runner
+│   ├── run_ground_station.py    # Docker Ground Station daemon & metric harvester
+│   ├── run_drone_node.py        # Autonomous Docker drone container daemon
+│   ├── src/pqc_swarm/           # Modular library
+│   │   ├── crypto/              # FalconSigner, SSS, and AEAD modules
+│   │   ├── models/              # Command, Approval, Share dataclasses, TrustRegistry
+│   │   ├── nodes/               # DroneNode and GroundStationNode
+│   │   └── sim/                 # Decentralized simulation harness
+│   ├── tests/                   # Automated unit tests (18 test cases)
+│   └── notebooks/               # Research notebooks & legacy exploration
+├── paper/
+│   └── result/                  # Publication-quality benchmark evaluation figures (PNG)
+├── docker_commands.sh           # Unified Docker simulation & cluster controller CLI
+├── docker-compose.yml           # Docker multi-container service definition
+├── plot_comparison.py           # Publication benchmark plotting & comparative analysis suite
+├── benchmark_results.csv        # In-memory simulation benchmark dataset (100 runs, 27 columns)
+├── benchmark_results.json       # Simulation dataset + Hardware sensitivity + Red-team battery
+├── cluster_benchmark_results.csv # Live multi-container Docker cluster dataset (100 runs, 27 columns)
+├── cluster_benchmark_results.json # Live cluster JSON dataset
+└── system_architecture.png      # High-level protocol diagram
 ```
 
 ---
@@ -82,39 +93,24 @@ python3 run_simulation.py --single -k 3 -n 5 -r 1
 
 ## Docker Usage & Simulation
 
-All docker commands are also available in [`docker_commands.sh`](docker_commands.sh).
+All docker commands are available through the unified helper script [`docker_commands.sh`](docker_commands.sh).
 
-### 1. Build the Lightweight Image (Debian Slim)
-```bash
-docker build -t pqc-drone-swarm:latest .
-```
-
-### 2. Run Test Battery inside Container
-```bash
-docker run --rm pqc-drone-swarm:latest
-```
-
-### 3. Run Benchmark Simulation inside Container
-```bash
-# Single configuration (k=3, n=5)
-docker run --rm pqc-drone-swarm:latest python3 run_simulation.py --single -k 3 -n 5 -r 1
-
-# Full benchmark across all configurations (3,5), (5,10), (10,20), (25,50)
-docker run --rm pqc-drone-swarm:latest python3 run_simulation.py -r 3
-```
-
-### 4. Interactive Swarm Controller (`docker_commands.sh`)
-You can use the helper script to control container counts and hardware constraints (RAM & CPU):
-
+### Interactive Swarm Controller (`docker_commands.sh`)
 ```bash
 # View all available commands
 ./docker_commands.sh
 
-# Build image
+# Build base Docker image
 ./docker_commands.sh build
 
 # Run unit tests inside container
 ./docker_commands.sh test
+
+# Run multi-process parallel simulation sweep across host CPU cores (exports benchmark_results.csv/json)
+./docker_commands.sh simulate
+
+# Run live multi-container cluster benchmark sweep across scales (n = 10..50) with clean teardown per scale:
+./docker_commands.sh cluster-sweep
 
 # Spin up 5 drones with default constraints (256MB RAM, 0.5 CPU each):
 ./docker_commands.sh up 5
@@ -125,8 +121,22 @@ You can use the helper script to control container counts and hardware constrain
 # View live logs across all containers:
 ./docker_commands.sh logs
 
+# Inject Red-Team adversary attacks (eavesdrop, tamper, replay, wrong-key, rogue-gs):
+./docker_commands.sh attack demo
+
 # Tear down cluster and network:
 ./docker_commands.sh down
+```
+
+---
+
+## Comparative Analysis & Visualization Suite
+
+Generate all publication-quality comparison figures comparing the in-memory simulation model against the live multi-container virtualized cluster across scales and RF loss rates:
+
+```bash
+# Generates all 18 comparative figures directly into paper/result/
+python3 plot_comparison.py
 ```
 
 

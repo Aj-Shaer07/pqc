@@ -52,12 +52,13 @@ All operations are automated through the unified controller script:
 | :--- | :--- | :--- |
 | **`build`** | `./docker_commands.sh build` | Compiles dependencies and builds the base `pqc-drone-swarm:latest` Docker image. |
 | **`test`** | `./docker_commands.sh test` | Runs the automated 18-test cryptographic, network, and system hardening test battery inside an isolated container. |
-| **`simulate`** | `./docker_commands.sh simulate [N] [KA] [KS] [LOSS] [RUNS] [MEM] [CPUS]` | Runs multi-scale dual-threshold simulation ($n=10\dots50$, $p_{\text{loss}}=0\dots30\%$, cgroup hardware constraints) and automatically exports `benchmark_results.csv` and `benchmark_results.json`. |
-| **`up`** | `./docker_commands.sh up [N] [MEM] [CPUS]` | Spawns the live swarm cluster with 1 Mosquitto Broker, 1 Ground Station, and $N$ Drones with custom CPU/RAM limits. |
+| **`simulate`** | `./docker_commands.sh simulate [OPTIONS]` | Runs complete Phase 3.2 simulation across host CPU cores (Table 1 multi-scale sweep, Table 2 hardware tiers, Table 3 Red-Team attacks) and auto-exports `benchmark_results.csv` and `benchmark_results.json`. |
+| **`cluster-sweep`** | `./docker_commands.sh cluster-sweep [SCALES] [ROUNDS]` | Runs live multi-container cluster benchmark sweep across scales (n = 10..50) with clean teardown per scale, exporting directly to CSV and JSON. |
+| **`up`** | `./docker_commands.sh up [N] [MEM] [CPUS]` | Spawns the live swarm cluster with 1 Mosquitto Broker, 1 Ground Station, and N Drones with custom CPU/RAM limits. |
 | **`logs`** | `./docker_commands.sh logs` | Streams real-time decentralized consensus logs across all containers. |
 | **`attack`** | `./docker_commands.sh attack [MODE] [DUR] [TARGET]` | Injects Red-Team attack scenarios: `demo`, `eavesdrop`, `wrong-key`, `tamper`, `replay`, or `rogue-gs`. |
-| **`sim-single`** | `./docker_commands.sh sim-single` | Runs a standalone benchmark simulation round ($k=3, n=5$) inside Docker. |
-| **`sim-all`** | `./docker_commands.sh sim-all [RUNS]` | Runs the full paper benchmark matrix across $(3,5), (5,10), (10,20), (25,50)$. |
+| **`sim-single`** | `./docker_commands.sh sim-single` | Runs a standalone benchmark simulation round (k=3, n=5) inside Docker. |
+| **`sim-all`** | `./docker_commands.sh sim-all [RUNS]` | Runs the full paper benchmark matrix across (3,5), (5,10), (10,20), (25,50). |
 | **`down`** | `./docker_commands.sh down` | Gracefully terminates and removes all containers, networks, and volumes. |
 
 ---
@@ -111,42 +112,53 @@ All operations are automated through the unified controller script:
 
 ---
 
-### 3.3 `simulate` — Multi-Scale Dual-Threshold Simulation & Automated CSV/JSON Export
+### 3.3 `simulate` — Comprehensive Phase 3.2 Evaluation Matrix & Automated CSV/JSON Export
+
 ```bash
-# Full Comprehensive Sweep (All scales n=10..50, 4 profiles, 5 loss rates, 3 hardware tiers)
+# Full Comprehensive Sweep (All scales n=10..50, 4 profiles, 5 loss rates, Table 2 hardware, Table 3 attacks)
 ./docker_commands.sh simulate
 
-# Quick Sanity Run (Single trial per configuration, 100 iterations)
+# Quick Sanity Smoke Test (1 trial per configuration across all scales, hardware, and attacks)
 ./docker_commands.sh simulate --quick
 
-# Custom Configuration: n=10, ka=7, ks=4
-./docker_commands.sh simulate 10 7 4
+# Focused Scale Run with custom repetitions (e.g. n=10, 2 runs)
+./docker_commands.sh simulate --scales 10 -r 2
 
-# Custom Configuration with RF Loss and Repetitions: n=20, ka=14, ks=8, 10% packet loss, 100 trials
-./docker_commands.sh simulate 20 14 8 0.10 100
+# Custom Single Configuration: n=10, ka=7, ks=4, 10% loss, 100 trials
+./docker_commands.sh simulate 10 7 4 0.10 100
+
+# Live Multi-Container Cluster Benchmark Sweep across scales with automatic teardown
+./docker_commands.sh cluster-sweep
+./docker_commands.sh cluster-sweep 10
 ```
 
-#### What It Does:
+#### What `simulate` Does:
 - **Zero Python Commands Required:** A single bash invocation coordinates the containerized benchmarking suite inside Docker.
-- **Volume Mounted Export:** Maps the host workspace (`-v "$PWD:/workspace"`) so that benchmark datasets are written directly to the host filesystem:
-  - `benchmark_results.csv`: Structured, flat CSV with complete statistical metrics (mean, standard deviation, 95% confidence intervals, median, and interquartile range) across every scale, loss rate, and hardware tier.
-  - `benchmark_results.json`: Full serialized benchmark dataset with sub-millisecond cryptographic profiles.
-- **Evaluates 4 Standardized Threshold Profiles Across $n \in \{10, 20, 30, 40, 50\}$:**
-  1. **Legacy Baseline:** $k_a = 0.70n, k_s = 0.70n$ (tightly coupled single threshold).
-  2. **Dual-Threshold Balanced:** $k_a = 0.70n, k_s = 0.40n$ (70% approval quorum with 30% loss absorption margin).
-  3. **Dual-Threshold High-Availability:** $k_a = 0.60n, k_s = 0.30n$ (fast consensus with 50% loss absorption margin).
-  4. **Dual-Threshold Strict:** $k_a = 0.80n, k_s = 0.50n$ (80% supermajority approval for sensitive kinetic missions).
-- **Simulates Stochastic RF Packet Loss & Jitter:**
-  - Packet loss rates: $p_{\text{loss}} \in \{0\%, 5\%, 10\%, 20\%, 30\%\}$.
-  - Propagation and MAC contention radio jitter: uniformly sampled $\mathcal{U}(5\text{ ms}, 35\text{ ms})$ per hop.
-- **Profiles 3 Embedded Hardware Tiers via Linux CFS Quotas & Cgroups:**
-  - **Tier 1 (Micro-UAV):** 0.25 CPU cores ($25\text{ ms}$ compute per $100\text{ ms}$ CFS period), 128MB RAM (Raspberry Pi Zero 2W).
-  - **Tier 2 (Tactical Quadrotor):** 0.50 CPU cores ($50\text{ ms}$ compute per $100\text{ ms}$ CFS period), 256MB RAM (Pixhawk / Raspberry Pi 4 companion).
-  - **Tier 3 (Swarm Leader):** 1.00 CPU cores ($100\text{ ms}$ compute per $100\text{ ms}$ CFS period), 512MB RAM (NVIDIA Jetson Nano).
-- **Renders 3 Console Summary Tables:**
-  - **Table 1:** Multi-Scale Swarm Scalability & Timing Breakdown.
-  - **Table 2:** RF Packet Loss Resilience & Consensus Probability Comparison.
-  - **Table 3:** Embedded Hardware Constraint Scaling & Latency Degradation.
+- **Table 1: Multi-Scale Swarm Scalability & Timing Breakdown:**
+  - Evaluates 4 standardized profiles (Legacy Baseline, Dual-Threshold Balanced, High-Availability, Strict) across fleet sizes n = 10, 20, 30, 40, 50.
+  - Sweeps 5 stochastic RF packet loss rates (0%, 5%, 10%, 15%, 20%) with radio jitter (5-35 ms).
+  - True distributed parallel latency modeling across host CPU worker processes.
+- **Table 2: Embedded Hardware Constraint Scaling:**
+  - Evaluates across 3 embedded companion tiers: Micro-UAV (0.25 core, 128MB RAM), Tactical Quadrotor (0.50 core, 256MB RAM), and Swarm Leader (1.00 core, 512MB RAM).
+- **Table 3: Red-Team Adversarial Attack Resilience Battery:**
+  - Validates active containment against 5 attack vectors: Passive Eavesdropping, Ciphertext Tampering, Wrong-Key Injection, Temporal Replay, and Rogue Ground Station Forgery.
+- **Volume-Mounted Automated Export:**
+  - Writes directly to [benchmark_results.csv](file:///home/aj-shaer/Desktop/pqc/benchmark_results.csv) (all 27 columns) and [benchmark_results.json](file:///home/aj-shaer/Desktop/pqc/benchmark_results.json).
+
+---
+
+### 3.4 `cluster-sweep` — Live Multi-Container Swarm Benchmark
+```bash
+# Default: runs n = 10, 20, 30, 40, 50 across 4 profiles and 5 loss rates (10 rounds each) with teardown
+./docker_commands.sh cluster-sweep
+
+# Single scale live container run (e.g. n = 10 drones, 10 rounds)
+./docker_commands.sh cluster-sweep 10 10
+```
+
+- **Physical Container Isolation:** Starts N real autonomous drone containers, 1 Ground Station container, and 1 Mosquitto MQTT broker container per scale.
+- **Sequential Lifecycle & Clean Teardown:** Evaluates one fleet size at a time, measures real Mosquitto MQTT bridge consensus latency, appends results to CSV and JSON, and cleanly tears down all containers (`docker compose down`) before advancing to the next scale.
+- **Default Statistical Rigor:** Runs 10 consensus rounds per configuration (matching the default 10 iterations of `./docker_commands.sh simulate`).
 
 ---
 

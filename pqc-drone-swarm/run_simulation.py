@@ -32,6 +32,7 @@ for p in [src_path, falcon_path, script_dir]:
         sys.path.insert(0, p)
 
 from pqc_swarm.sim.in_memory_sim import run_decentralized_simulation
+from pqc_swarm.crypto.falcon import FalconSigner
 from pqc_swarm.crypto.aead import generate_mission_key
 from pqc_swarm.crypto.sss import generate_shares
 from pqc_swarm.models.registry import TrustRegistry
@@ -209,6 +210,144 @@ def run_adversary_battery() -> List[Dict[str, Any]]:
 
 
 # =====================================================================
+# MULTI-PROCESS WORKER & SWARM CACHE
+# =====================================================================
+
+_worker_swarm_cache: Dict[int, Tuple[GroundStationNode, List[DroneNode]]] = {}
+_precomputed_raw_keys: Dict[int, Tuple[Tuple[bytes, bytes], List[Tuple[bytes, bytes]]]] = {}
+
+
+def get_or_create_swarm(
+    fleet_size: int,
+    key_bundle: Optional[Tuple[Tuple[bytes, bytes], List[Tuple[bytes, bytes]]]] = None,
+) -> Tuple[GroundStationNode, List[DroneNode]]:
+    """Retrieve or initialize persistent cached swarm identity keys for scale n."""
+    if fleet_size not in _worker_swarm_cache:
+        bundle = key_bundle or _precomputed_raw_keys.get(fleet_size)
+        reg = TrustRegistry()
+        if bundle:
+            gs_kp, drone_kps = bundle
+            gs_node = GroundStationNode(keypair=gs_kp)
+            reg.set_gs_public_key(gs_node.public_key)
+            drone_list = []
+            for i in range(fleet_size):
+                kp = drone_kps[i] if i < len(drone_kps) else None
+                d = DroneNode(
+                    drone_id=f"DRONE_{i+1}",
+                    share=(i + 1, 1),
+                    threshold=3,
+                    trust_registry=reg,
+                    keypair=kp,
+                )
+                reg.register_drone(d.drone_id, d.public_key)
+                drone_list.append(d)
+        else:
+            t0 = time.perf_counter()
+            print(f"[*] Bootstrapping swarm (n={fleet_size}): provisioning 1 Ground Station + {fleet_size} Falcon-512 drone identities...", flush=True)
+            gs_node = GroundStationNode()
+            reg.set_gs_public_key(gs_node.public_key)
+            drone_list = []
+            for i in range(fleet_size):
+                d = DroneNode(
+                    drone_id=f"DRONE_{i+1}",
+                    share=(i + 1, 1),
+                    threshold=3,
+                    trust_registry=reg,
+                )
+                reg.register_drone(d.drone_id, d.public_key)
+                drone_list.append(d)
+            elapsed = time.perf_counter() - t0
+            print(f"[+] Falcon-512 keys created for n={fleet_size} in {elapsed:.2f}s.\n", flush=True)
+
+        _worker_swarm_cache[fleet_size] = (gs_node, drone_list)
+    return _worker_swarm_cache[fleet_size]
+
+
+def evaluate_single_config(task_tuple: Tuple[int, str, int, int, float, int, Any]) -> Dict[str, Any]:
+    """Evaluates a single threshold/loss configuration across num_runs repetitions."""
+    n, p_name, ka, ks, loss_rate, num_runs, key_bundle = task_tuple
+    loss_pct_str = f"{int(loss_rate * 100)}%"
+
+    gs_cached, drones_cached = get_or_create_swarm(n, key_bundle=key_bundle)
+
+    consensus_times = []
+    drone_verify_times = []
+    reconstruct_times = []
+    decrypt_times = []
+    accepted_count = 0
+    dropped_count = 0
+
+    wire_cmd = 0
+    wire_app = 0
+    wire_share = 0
+    wire_total = 0
+
+    for r in range(num_runs):
+        res = run_decentralized_simulation(
+            n=n,
+            ka=ka,
+            ks=ks,
+            loss_rate=loss_rate,
+            min_jitter_ms=5.0,
+            max_jitter_ms=35.0,
+            profile_name=p_name,
+            cached_drones=drones_cached,
+            cached_gs=gs_cached,
+        )
+
+        if res["success"]:
+            accepted_count += 1
+            consensus_times.append(res["consensus_time_avg"] * 1000.0)
+        else:
+            dropped_count += 1
+
+        drone_verify_times.append(res["drone_verify_avg"] * 1000.0)
+        reconstruct_times.append(res["reconstruct_avg"] * 1000.0)
+        decrypt_times.append(res["decrypt_avg"] * 1000.0)
+
+        wire_cmd = res["wire_command_bytes"]
+        wire_app = res["wire_approval_bytes"]
+        wire_share = res["wire_share_bytes"]
+        wire_total = res["total_wire_bytes"]
+
+    success_pct = (accepted_count / num_runs) * 100.0
+    c_stats = calculate_stats(consensus_times)
+    dv_stats = calculate_stats(drone_verify_times)
+    rec_stats = calculate_stats(reconstruct_times)
+    dec_stats = calculate_stats(decrypt_times)
+
+    return {
+        "swarm_size_n": n,
+        "profile_name": p_name,
+        "approval_threshold_ka": ka,
+        "reconstruction_threshold_ks": ks,
+        "loss_rate": loss_rate,
+        "loss_percent_str": loss_pct_str,
+        "jitter": "5-35ms",
+        "cpu_quota": 0.50,
+        "ram_limit": "256m",
+        "total_runs": num_runs,
+        "runs_accepted": accepted_count,
+        "runs_rejected": 0,
+        "runs_dropped": dropped_count,
+        "success_rate_percent": round(success_pct, 1),
+        "consensus_mean_ms": round(c_stats["mean"], 2),
+        "consensus_std_ms": round(c_stats["std"], 2),
+        "consensus_ci95_low_ms": round(c_stats["ci95_low"], 2),
+        "consensus_ci95_high_ms": round(c_stats["ci95_high"], 2),
+        "consensus_median_ms": round(c_stats["median"], 2),
+        "consensus_iqr_ms": round(c_stats["iqr"], 2),
+        "drone_verify_mean_ms": round(dv_stats["mean"], 4),
+        "reconstruct_mean_ms": round(rec_stats["mean"], 4),
+        "decrypt_mean_ms": round(dec_stats["mean"], 4),
+        "wire_command_bytes": wire_cmd,
+        "wire_approval_bytes": wire_app,
+        "wire_encrypted_share_bytes": wire_share,
+        "total_network_traffic_kb": round(wire_total / 1024.0, 2),
+    }
+
+
+# =====================================================================
 # MAIN BENCHMARK ENGINE
 # =====================================================================
 
@@ -222,8 +361,9 @@ def run_comprehensive_benchmarks(
     include_attacks: bool = True,
     output_csv: Optional[str] = None,
     output_json: Optional[str] = None,
+    workers: Optional[int] = None,
 ):
-    loss_rates = loss_rates or [0.0, 0.05, 0.10, 0.20, 0.30]
+    loss_rates = loss_rates or [0.0, 0.05, 0.10, 0.15, 0.20]
 
     all_table1_rows = []
     all_table2_rows = []
@@ -253,114 +393,48 @@ def run_comprehensive_benchmarks(
     total_configs = len(test_matrix)
     print(f"[*] Starting execution of {total_configs} configuration combinations ({num_runs} iterations each)...")
 
-    # Persistent swarm cache per fleet scale to avoid redundant key generation
-    swarm_cache: Dict[int, Tuple[GroundStationNode, List[DroneNode]]] = {}
+    # Pre-generate and announce Falcon-512 identity keys per fleet scale (avoiding worker delay)
+    active_scales = [single_config[0]] if single_config else swarm_scales
+    for s_n in active_scales:
+        if s_n not in _precomputed_raw_keys:
+            print(f"[*] Bootstrapping swarm identity keys (n={s_n:02d}): generating 1 Ground Station + {s_n} Falcon-512 drone keypairs...", flush=True)
+            t0 = time.perf_counter()
+            signer = FalconSigner(512)
+            gs_kp = signer.keygen()
+            drone_kps = [signer.keygen() for _ in range(s_n)]
+            _precomputed_raw_keys[s_n] = (gs_kp, drone_kps)
+            t_elapsed = time.perf_counter() - t0
+            print(f"[+] Falcon-512 keys created for n={s_n:02d} in {t_elapsed:.2f}s.\n", flush=True)
 
-    def get_or_create_swarm(fleet_size: int) -> Tuple[GroundStationNode, List[DroneNode]]:
-        if fleet_size not in swarm_cache:
-            print(f"[*] Bootstrapping swarm (n={fleet_size}): provisioning 1 Ground Station + {fleet_size} Falcon-512 drone identities (one-time bootup)...", flush=True)
-            reg = TrustRegistry()
-            gs_node = GroundStationNode()
-            reg.set_gs_public_key(gs_node.public_key)
-            drone_list = []
-            for i in range(fleet_size):
-                d = DroneNode(
-                    drone_id=f"DRONE_{i+1}",
-                    share=(i + 1, 1),
-                    threshold=3,
-                    trust_registry=reg,
-                )
-                reg.register_drone(d.drone_id, d.public_key)
-                drone_list.append(d)
-            swarm_cache[fleet_size] = (gs_node, drone_list)
-            print(f"[+] Provisioning complete for n={fleet_size}. Keys cached for all configurations.\n", flush=True)
-        return swarm_cache[fleet_size]
+    num_workers = workers if workers is not None else min(os.cpu_count() or 4, 8)
+    if single_config is not None or total_configs <= 1:
+        num_workers = 1
 
-    for idx, (n, p_name, ka, ks, loss_rate) in enumerate(test_matrix, 1):
-        # Ensure swarm keys for scale n are provisioned before printing the test line
-        gs_cached, drones_cached = get_or_create_swarm(n)
+    tasks = [(n, p_name, ka, ks, l, num_runs, _precomputed_raw_keys.get(n)) for (n, p_name, ka, ks, l) in test_matrix]
 
-        loss_pct_str = f"{int(loss_rate * 100)}%"
-        print(f"  [{idx:02d}/{total_configs:02d}] Testing n={n:02d} | {p_name:<32} (ka={ka:02d}, ks={ks:02d}) | Loss={loss_pct_str:>3}... ", end="", flush=True)
+    if num_workers > 1:
+        import concurrent.futures
+        print(f"[*] Harnessing {num_workers} parallel worker processes across host CPU cores...\n", flush=True)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+            future_to_idx = {executor.submit(evaluate_single_config, t): idx for idx, t in enumerate(tasks, 1)}
+            completed = []
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                res_row = future.result()
+                completed.append((idx, res_row))
+                print(f"  [{idx:02d}/{total_configs:02d}] Finished n={res_row['swarm_size_n']:02d} | {res_row['profile_name']:<32} (ka={res_row['approval_threshold_ka']:02d}, ks={res_row['reconstruction_threshold_ks']:02d}) | Loss={res_row['loss_percent_str']:>3}... Done! Success: {res_row['success_rate_percent']:>5.1f}% | Mean Latency: {res_row['consensus_mean_ms']:>7.2f} ms", flush=True)
 
-        consensus_times = []
-        drone_verify_times = []
-        reconstruct_times = []
-        decrypt_times = []
-        accepted_count = 0
-        dropped_count = 0
+            completed.sort(key=lambda x: x[0])
+            all_table1_rows = [r[1] for r in completed]
+    else:
+        for idx, t in enumerate(tasks, 1):
+            n, p_name, ka, ks, loss_rate, _ = t
+            loss_pct_str = f"{int(loss_rate * 100)}%"
+            print(f"  [{idx:02d}/{total_configs:02d}] Testing n={n:02d} | {p_name:<32} (ka={ka:02d}, ks={ks:02d}) | Loss={loss_pct_str:>3}... ", end="", flush=True)
+            res_row = evaluate_single_config(t)
+            all_table1_rows.append(res_row)
+            print(f"Done! Success: {res_row['success_rate_percent']:>5.1f}% | Mean Latency: {res_row['consensus_mean_ms']:>7.2f} ms", flush=True)
 
-        wire_cmd = 0
-        wire_app = 0
-        wire_share = 0
-        wire_total = 0
-
-        for r in range(num_runs):
-            # Realistic radio jitter between 5ms and 35ms
-            res = run_decentralized_simulation(
-                n=n,
-                ka=ka,
-                ks=ks,
-                loss_rate=loss_rate,
-                min_jitter_ms=5.0,
-                max_jitter_ms=35.0,
-                profile_name=p_name,
-                cached_drones=drones_cached,
-                cached_gs=gs_cached,
-            )
-
-            if res["success"]:
-                accepted_count += 1
-                consensus_times.append(res["consensus_time_avg"] * 1000.0)
-            else:
-                dropped_count += 1
-
-            drone_verify_times.append(res["drone_verify_avg"] * 1000.0)
-            reconstruct_times.append(res["reconstruct_avg"] * 1000.0)
-            decrypt_times.append(res["decrypt_avg"] * 1000.0)
-
-            wire_cmd = res["wire_command_bytes"]
-            wire_app = res["wire_approval_bytes"]
-            wire_share = res["wire_share_bytes"]
-            wire_total = res["total_wire_bytes"]
-
-        success_pct = (accepted_count / num_runs) * 100.0
-        c_stats = calculate_stats(consensus_times)
-        dv_stats = calculate_stats(drone_verify_times)
-        rec_stats = calculate_stats(reconstruct_times)
-        dec_stats = calculate_stats(decrypt_times)
-
-        row_data = {
-            "swarm_size_n": n,
-            "profile_name": p_name,
-            "approval_threshold_ka": ka,
-            "reconstruction_threshold_ks": ks,
-            "loss_rate": loss_rate,
-            "loss_percent_str": loss_pct_str,
-            "jitter": "5-35ms",
-            "cpu_quota": 0.50,
-            "ram_limit": "256m",
-            "total_runs": num_runs,
-            "runs_accepted": accepted_count,
-            "runs_rejected": 0,
-            "runs_dropped": dropped_count,
-            "success_rate_percent": round(success_pct, 1),
-            "consensus_mean_ms": round(c_stats["mean"], 2),
-            "consensus_std_ms": round(c_stats["std"], 2),
-            "consensus_ci95_low_ms": round(c_stats["ci95_low"], 2),
-            "consensus_ci95_high_ms": round(c_stats["ci95_high"], 2),
-            "consensus_median_ms": round(c_stats["median"], 2),
-            "consensus_iqr_ms": round(c_stats["iqr"], 2),
-            "drone_verify_mean_ms": round(dv_stats["mean"], 4),
-            "reconstruct_mean_ms": round(rec_stats["mean"], 4),
-            "decrypt_mean_ms": round(dec_stats["mean"], 4),
-            "wire_command_bytes": wire_cmd,
-            "wire_approval_bytes": wire_app,
-            "wire_encrypted_share_bytes": wire_share,
-            "total_network_traffic_kb": round(wire_total / 1024.0, 2),
-        }
-        all_table1_rows.append(row_data)
-        print(f"Done! Success: {success_pct:>5.1f}% | Mean Latency: {c_stats['mean']:>7.2f} ms")
 
     # =====================================================================
     # EXPERIMENT 2: HARDWARE SENSITIVITY BENCHMARK
@@ -516,6 +590,9 @@ def main():
         "--quick", action="store_true", default=False, help="Quick run mode (evaluates representative subsets for rapid testing)"
     )
     parser.add_argument(
+        "-w", "--workers", type=int, default=None, help="Number of parallel worker processes (default: auto, up to 8)"
+    )
+    parser.add_argument(
         "--csv", type=str, default=None, help="Custom output CSV path (default: ../benchmark_results.csv)"
     )
     parser.add_argument(
@@ -563,6 +640,7 @@ def main():
         include_attacks=True,
         output_csv=args.csv,
         output_json=args.json,
+        workers=args.workers,
     )
 
 

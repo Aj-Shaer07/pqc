@@ -30,9 +30,21 @@ services:
       - MQTT_PORT=1883
       - NODE_ROLE=ground_station
       - NUM_DRONES=${NUM_DRONES:-5}
+      - THRESHOLD=${THRESHOLD:-3}
+      - SWARM_KA=${SWARM_KA:-3}
+      - SWARM_KS=${SWARM_KS:-3}
+      - PACKET_LOSS=${PACKET_LOSS:-0.0}
+      - BENCHMARK_MODE=${BENCHMARK_MODE:-0}
+      - BENCHMARK_ROUNDS=${BENCHMARK_ROUNDS:-3}
+      - PROFILE_NAME=${PROFILE_NAME:-Dual-Threshold Balanced}
+      - BENCHMARK_CSV=${BENCHMARK_CSV:-/workspace/benchmark_results.csv}
+      - BENCHMARK_JSON=${BENCHMARK_JSON:-/workspace/benchmark_results.json}
+      - DRONE_MEM_LIMIT=${DRONE_MEM_LIMIT:-256m}
+      - DRONE_CPU_LIMIT=${DRONE_CPU_LIMIT:-0.50}
       - SWARM_MESH_KEY=${SWARM_MESH_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
     volumes:
       - ./pqc-drone-swarm:/app/pqc-drone-swarm
+      - .:/workspace
     networks:
       - swarm-net
     command: ["python3", "run_ground_station.py"]
@@ -54,7 +66,11 @@ services:
       - MQTT_BROKER=mqtt-broker
       - MQTT_PORT=1883
       - NODE_ROLE=drone
-      - THRESHOLD=3
+      - THRESHOLD=${THRESHOLD:-3}
+      - SWARM_KA=${SWARM_KA:-3}
+      - SWARM_KS=${SWARM_KS:-3}
+      - PACKET_LOSS=${PACKET_LOSS:-0.0}
+      - FRESHNESS_WINDOW=${FRESHNESS_WINDOW:-30.0}
       - SWARM_MESH_KEY=${SWARM_MESH_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
     volumes:
       - ./pqc-drone-swarm:/app/pqc-drone-swarm

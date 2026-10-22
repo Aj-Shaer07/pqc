@@ -11,11 +11,15 @@ from pqc_swarm.models.messages import CommandMessage
 class GroundStationNode:
     """The Ground Station generates cryptographic keys and signs mission commands."""
 
-    def __init__(self, signer: Optional[FalconSigner] = None):
+    def __init__(self, signer: Optional[FalconSigner] = None, keypair: Optional[Tuple[bytes, bytes]] = None):
         self.signer = signer or FalconSigner(512)
-        start = time.perf_counter()
-        self.private_key, self.public_key = self.signer.keygen()
-        self.keygen_time = time.perf_counter() - start
+        if keypair is not None:
+            self.private_key, self.public_key = keypair
+            self.keygen_time = 0.0
+        else:
+            start = time.perf_counter()
+            self.private_key, self.public_key = self.signer.keygen()
+            self.keygen_time = time.perf_counter() - start
 
     def create_command(
         self,

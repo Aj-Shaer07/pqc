@@ -33,6 +33,7 @@ class DroneNode:
         mesh_key: Optional[bytes] = None,
         approval_threshold: Optional[int] = None,
         reconstruct_threshold: Optional[int] = None,
+        keypair: Optional[Tuple[bytes, bytes]] = None,
     ):
         self.drone_id = drone_id
         self.share = share  # (x, y)
@@ -47,9 +48,13 @@ class DroneNode:
         self.mesh_key = mesh_key
         self._state_lock = threading.RLock()
 
-        start = time.perf_counter()
-        self.private_key, self.public_key = self.signer.keygen()
-        self.keygen_time = time.perf_counter() - start
+        if keypair is not None:
+            self.private_key, self.public_key = keypair
+            self.keygen_time = 0.0
+        else:
+            start = time.perf_counter()
+            self.private_key, self.public_key = self.signer.keygen()
+            self.keygen_time = time.perf_counter() - start
 
         # Register self in trust registry
         self.trust_registry.register_drone(self.drone_id, self.public_key)

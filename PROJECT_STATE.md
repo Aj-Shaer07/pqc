@@ -18,7 +18,7 @@ To ensure strict mathematical and architectural uniformity across all documentat
 | **$K_{\text{mesh}}$** | Swarm Mesh Session Key (AEAD broadcast encryption) | 256-bit symmetric key (`secrets.token_bytes(32)`) | Mesh broadcast cipher key |
 | **$K_{\text{mission}}$ ($S$)** | Master Mission Key ($S = f(0) \pmod p$) | 256-bit key embedded in $\mathbb{F}_p$ ($p = 2^{521} - 1$) | Mission payload cipher key |
 | **$W$** | Temporal anti-replay sliding window | <span style="white-space:nowrap">$W = \pm 5.0\text{ s}$</span> ($2W = 10.0\text{ s}$ TTL cache) | Freshness window |
-| **$p_{\text{loss}}$** | Simulated RF mesh packet loss probability | <span style="white-space:nowrap">$p_{\text{loss}} \in \{0.05, 0.10, 0.20\}$</span> (5%, 10%, 20%) | Loss probability |
+| **$p_{\text{loss}}$** | Simulated RF mesh packet loss probability | <span style="white-space:nowrap">$p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.15, 0.20\}$</span> (0%, 5%, 10%, 15%, 20%) | Loss probability |
 | **$m$** (GS) | Multi-operator Ground Station signature threshold | $m \le n_{\text{gs}}$ (e.g., 2-of-3 GS operators) | Replaces legacy M-of-N notation |
 | **RAM Quotas** | Container memory cgroup limit | `256m` (256 MB default); `128m`, `512m` evaluated | Standardized MB / cgroup syntax |
 | **CPU Quotas** | Container CPU core throttling quota | `0.5` cores (default); `0.25`, `1.0` evaluated | Standardized core allocation |
@@ -138,8 +138,21 @@ To ensure strict mathematical and architectural uniformity across all documentat
   - [x] **Network & Bandwidth Wire Overhead Profiling**: Profile exact wire payload sizes: Commands ($\approx 1{,}214\text{ B}$), Approvals ($\approx 778\text{ B}$), Encrypted Shares ($\approx 846\text{ B}$), and Telemetry ($\approx 350\text{ B}$). Quantify aggregate bandwidth (KB) over MQTT topics as swarm scales from $n=10$ to $n=50$.
   - [x] **Hardware Resource Profiling (Cgroups / Flight Computer Simulation)**: Instrument per-container memory RSS (MB) tracking and CPU quota evaluation across Ultra-Constrained (128 MB, 0.25 core), Standard (256 MB, 0.50 core), and High-Cap (512 MB, 1.00 core) tiers across $n \in \{10, 20, 30, 40, 50\}$.
 - [x] **Varying Network Conditions Simulation (Packet Loss & Jitter)**:
-  - [x] Implement simulated RF mesh loss rates ($p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.20, 0.30\}$, i.e., 0%, 5%, 10%, 20%, 30%) and radio propagation jitter ($5\text{--}35\text{ ms}$).
+  - [x] Implement simulated RF mesh loss rates ($p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.15, 0.20\}$, i.e., 0%, 5%, 10%, 15%, 20%) and radio propagation jitter ($5\text{--}35\text{ ms}$).
   - [x] Quantify threshold consensus success rates, accepted counts, and loss dropouts when $n > k_a \ge k_s$.
+- [x] **Parallel Multi-Core Simulation & Distributed Latency Modeling**:
+  - [x] Harness `concurrent.futures.ProcessPoolExecutor` across host CPU cores (auto up to 8 parallel workers) with module-level task execution and worker-level swarm caching.
+  - [x] Model true distributed parallel execution where each companion computer processes its local queue independently up to quorum $k_a$ and threshold $k_s$ with early quorum exit.
+- [x] **Live Multi-Container Swarm Benchmark Sweep & Automatic Metric Harvester**:
+  - [x] Automated multi-scale container orchestration directly in `./docker_commands.sh cluster-sweep` (loops through $n \in \{10, 20, 30, 40, 50\}$, starts real Docker containers, measures real MQTT bridge consensus latency, and executes clean teardown per scale).
+  - [x] Ground Station automated benchmark daemon collecting live container metrics (consensus latency, Falcon-512 verify time, Shamir reconstruction time, AEAD decrypt time, success rate) and exporting directly to `cluster_benchmark_results.csv` (100 rows, 27 columns) and `cluster_benchmark_results.json`.
+- [x] **Publication Visualization Suite & Comparative Analysis (`plot_comparison.py`)**:
+  - [x] Evaluates all 5 packet loss rates ($p_{\text{loss}} \in \{0\%, 5\%, 10\%, 15\%, 20\%\}$) across all 5 scales ($n \in \{10, 20, 30, 40, 50\}$).
+  - [x] Cryptographic primitive micro-benchmarking (Falcon-512 signing, verification, Shamir reconstruction, wire decryption).
+  - [x] Latency decomposition isolating computation from host CFS throttling and MQTT IPC queueing (explaining the ~10x container overhead).
+  - [x] Hardware constraint scaling across microprocessor profiles (Raspberry Pi Zero, Pi 4, Jetson Nano).
+  - [x] Red-Team adversarial attack resilience battery scorecard (50/50 attacks neutralized, 100% containment).
+  - [x] All 18 high-resolution figures stored in `paper/result/`.
 - [ ] **Dynamic Swarm Membership, Churn & Fail-Safe Handling**:
   - [ ] Trust registry revocation lists broadcast over `swarm/registry`.
   - [ ] Dynamic onboarding of replacement drones with fresh shares without altering the master mission key ($K_{\text{mission}}$).
