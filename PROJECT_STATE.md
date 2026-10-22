@@ -147,7 +147,7 @@ To ensure strict mathematical and architectural uniformity across all documentat
   - [x] Automated multi-scale container orchestration directly in `./docker_commands.sh cluster-sweep` (loops through $n \in \{10, 20, 30, 40, 50\}$, starts real Docker containers, measures real MQTT bridge consensus latency, and executes clean teardown per scale).
   - [x] Ground Station automated benchmark daemon collecting live container metrics (consensus latency, Falcon-512 verify time, Shamir reconstruction time, AEAD decrypt time, success rate) and exporting directly to `cluster_benchmark_results.csv` (100 rows, 27 columns) and `cluster_benchmark_results.json`.
 - [x] **Publication Visualization Suite & Comparative Analysis (`plot_comparison.py`)**:
-  - [x] Evaluates all 5 packet loss rates ($p_{\text{loss}} \in \{0\%, 5\%, 10\%, 15\%, 20\%\}$) across all 5 scales ($n \in \{10, 20, 30, 40, 50\}$).
+  - [x] Evaluates all 5 packet loss rates ($p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.15, 0.20\}$, 0%–20%) across all 5 scales ($n \in \{10, 20, 30, 40, 50\}$).
   - [x] Cryptographic primitive micro-benchmarking (Falcon-512 signing, verification, Shamir reconstruction, wire decryption).
   - [x] Latency decomposition isolating computation from host CFS throttling and MQTT IPC queueing (explaining the ~10x container overhead).
   - [x] Hardware constraint scaling across microprocessor profiles (Raspberry Pi Zero, Pi 4, Jetson Nano).

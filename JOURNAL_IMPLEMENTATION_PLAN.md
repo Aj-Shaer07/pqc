@@ -255,10 +255,10 @@ Cryptographic operations (Falcon-512 keypair generation, digital signing, signat
 #### 2. End-to-End Consensus Latency & Distributed Concurrent Timing Formulation
 - **Physical Flight vs. In-Memory Statistical Modeling:** In physical flight, every UAV companion computer operates as an independent concurrent processor. To ensure statistical simulations accurately mirror real-world physical swarms rather than artificially summing every verification sequentially on a single thread (which created an artificial $O(n^2)$ serial bottleneck), the consensus timing formulation models distributed parallel queue execution:
   - For each drone $D_i$ in the fleet:
-    $$\Delta T_{\text{drone}}^{(i)} = \Delta t_{\text{GS\_prop}}^{(i)} + T_{\text{verify\_GS}}^{(i)} + \max_{j \in Q_a^{(i)}} (\Delta t_{\text{app\_prop}}^{(i, j)} + T_{\text{verify\_app}}^{(i, j)}) + \max_{m \in Q_s^{(i)}} (\Delta t_{\text{share\_prop}}^{(i, m)}) + T_{\text{reconstruct}}^{(i)} + T_{\text{decrypt}}^{(i)}$$
+    $$\Delta T_{\text{drone}}^{(i)} = \Delta t_{\text{GS-prop}}^{(i)} + T_{\text{verify-GS}}^{(i)} + \max_{j \in Q_a^{(i)}} (\Delta t_{\text{app-prop}}^{(i, j)} + T_{\text{verify-app}}^{(i, j)}) + \max_{m \in Q_s^{(i)}} (\Delta t_{\text{share-prop}}^{(i, m)}) + T_{\text{reconstruct}}^{(i)} + T_{\text{decrypt}}^{(i)}$$
     Where:
-    - $\Delta t_{\text{GS\_prop}}^{(i)}$ is the RF wave propagation delay from Ground Station to Drone $D_i$ ($\mathcal{U}(5\text{ ms}, 35\text{ ms})$).
-    - $T_{\text{verify\_GS}}^{(i)}$ is Drone $D_i$'s local Falcon-512 signature verification of the GS command.
+    - $\Delta t_{\text{GS-prop}}^{(i)}$ is the RF wave propagation delay from Ground Station to Drone $D_i$ ($\mathcal{U}(5\text{ ms}, 35\text{ ms})$).
+    - $T_{\text{verify-GS}}^{(i)}$ is Drone $D_i$'s local Falcon-512 signature verification of the GS command.
     - $Q_a^{(i)}$ is the chronological set of the first $k_a$ valid peer approvals arriving at Drone $D_i$.
     - $Q_s^{(i)}$ is the chronological set of the first $k_s$ valid encrypted shares arriving at Drone $D_i$.
     - $T_{\text{reconstruct}}^{(i)}$ is Lagrange polynomial interpolation over $\mathbb{F}_{2^{521}-1}$ across $k_s$ shares.
@@ -268,7 +268,7 @@ Cryptographic operations (Falcon-512 keypair generation, digital signing, signat
     $$\Delta T_{\text{consensus}} = \frac{1}{|E|} \sum_{i \in E} \Delta T_{\text{drone}}^{(i)}$$
   - This establishes true linear computational scaling $O(k_a + k_s)$ per companion computer rather than $O(n^2)$ serial cumulative delay.
 - **Live Container Clock Coherence:** In the containerized Docker multi-container cluster, each drone runs inside an isolated container namespace (separate PID, IPC, mount, and network namespaces). However, all Docker containers share the identical underlying Linux host kernel time subsystem (`CLOCK_REALTIME`). Consequently, all containerized drones and the Ground Station operate with synchronized nanosecond time bases without requiring distributed network synchronization daemons (such as chrony or ntpd), eliminating inter-container clock skew:
-  $$\Delta T_{\text{container\_consensus}} = (t_{\text{executed}} - t_{\text{dispatched}}) \times 1000\text{ ms}$$
+  $$\Delta T_{\text{container-consensus}} = (t_{\text{executed}} - t_{\text{dispatched}}) \times 1000\text{ ms}$$
 
 #### 3. Multi-Channel Metric Exposure Architecture
 Execution latencies, consensus states, and resource metrics are exposed through five distinct, complementary channels:
@@ -451,7 +451,7 @@ To validate feasibility across physical flight hardware without starving real-ti
    - **Negligible Crypto Overhead:** Even at $k_s = 20$ on a heavily throttled core, reconstruction consumes $\le 1.1\text{ ms}$, proving that Horner's rule and modular arithmetic do not introduce bottlenecks in large swarms.
 4. **Node Peak Memory Footprint (RAM RSS) vs. Hardware Quotas (Panel D):**
    - Peak Resident Set Size (RSS) memory consumption per node ranges from **44.9 MB** ($n = 10$) to **56.1 MB** ($n = 50$) on Pi Zero, **54.6 MB to 65.8 MB** on Pi 4, and **61.2 MB to 72.4 MB** on Jetson.
-   - **Guaranteed Memory Safety:** Compared against the 128 MB hardware limit of the Pi Zero, the node retains **$> 56\%$ safety headroom** at $n = 50$, and $> 74\%$ headroom on the 256 MB Pi 4. Zero Out-Of-Memory (OOM) killer terminations occur under sustained operation.
+   - **Guaranteed Memory Safety:** Compared against the 128 MB hardware limit of the Pi Zero, the node retains **>56% safety headroom** at $n = 50$, and >74% headroom on the 256 MB Pi 4. Zero Out-Of-Memory (OOM) killer terminations occur under sustained operation.
 
 ---
 
@@ -574,8 +574,8 @@ Micro-benchmarking of the core cryptographic primitives confirms:
 ### 7.5 RF Packet Loss Resilience & Profile Optimization
 *(Artifacts: `paper/result/packet_loss_all_scales_grid.png`, `paper/result/latency_vs_scale_all_loss_grid.png`)*
 
-Evaluating all 5 loss rates ($p_{\text{loss}} \in \{0\%, 5\%, 10\%, 15\%, 20\%\}$) across fleet sizes demonstrates:
+Evaluating all 5 loss rates ($p_{\text{loss}} \in \{0.0, 0.05, 0.10, 0.15, 0.20\}$, i.e., 0%–20%) across fleet sizes demonstrates:
 - **Dual-Threshold High-Availability ($k_a = 0.60n, k_s = 0.30n$):** Maintains **100% consensus success** even under 15% packet loss at $n = 50$, absorbing dropped approvals through its $k_a - k_s = 0.30n$ redundancy margin.
-- **Dual-Threshold Balanced ($k_a = 0.70n, k_s = 0.40n$):** Delivers optimal balance, retaining $> 90\%$ success under 10% packet loss while enforcing strict 70% peer authorization.
+- **Dual-Threshold Balanced ($k_a = 0.70n, k_s = 0.40n$):** Delivers optimal balance, retaining >90% success under 10% packet loss while enforcing strict 70% peer authorization.
 - **Legacy Baseline ($k_a = k_s = 0.70n$):** Suffers catastrophic consensus collapse as packet loss reaches 15%–20% (success drops to **0%**), mathematically validating the necessity of decoupled dual thresholds in tactical wireless environments.
 
